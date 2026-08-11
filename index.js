@@ -236,9 +236,11 @@ async function waitForAccountLink() {
 }
 
 // --- Configuration updated ----------------------------------------------------
-// Also fires for OUR OWN setConfig() when the session is persisted, so a
-// reconnection is only triggered when the session actually changed — otherwise
-// persist -> update -> reconnect -> persist would loop for ever.
+// Only a save from the FRONTEND lands here: the config the integration writes
+// itself (the session) is not echoed back — checked in
+// externalIntegration.setIntegrationConfig, which sends no config-updated, unlike
+// saveConfigFromFront. The session comparison below therefore guards against a
+// no-op save from the user, not against a loop of our own making.
 gladys.onConfigUpdated(async (newConfig) => {
   const updated = readSession(newConfig);
   if (xiaomi.isLoggedIn() && sameSession(updated, session)) {
