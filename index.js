@@ -23,8 +23,24 @@ import crypto from 'node:crypto';
 
 import { GladysIntegration, logger } from '@gladysassistant/integration-sdk';
 
-import { convertDevice, vacuumExternalIds } from './src/devices/convertDevice.js';
-import { buildPollStates, buildSetCommand } from './src/devices/vacuum.js';
+import {
+  DOCK_SLUG,
+  convertDevice,
+  convertDockDevice,
+  dockExternalIds,
+  vacuumExternalIds,
+} from './src/devices/convertDevice.js';
+import {
+  buildConsumableStates,
+  buildDockStates,
+  buildPollStates,
+  buildSetCommand,
+} from './src/devices/vacuum.js';
+import {
+  FEATURE_CODES,
+  ROBOROCK_SEGMENT_CLEANING_STATES,
+  ROOM_SELECTION_NONE,
+} from './src/constants.js';
 import { isSessionUsable, readSession, sameSession, sessionToConfig } from './src/session.js';
 import { XiaomiClient } from './src/xiaomi/client.js';
 
@@ -36,6 +52,55 @@ const gladys = new GladysIntegration();
 // again.
 let session = readSession();
 let xiaomi = new XiaomiClient(session);
+
+// Robots for which a room clean has just been asked. `active` only turns true
+// once the robot has actually been seen in a segment-cleaning state.
+const roomCleanings = new Map();
+
+// Lets a stale selection be cleared after a restart of the integration, without
+// wiping a fresh selection before the robot has had time to start on it.
+const initializedRoomSelectors = new Set();
+
+/**
+ * Build the room-selector feedback produced by a status change.
+ *
+ * The selector is reset only after a segment cleaning has actually been observed
+ * and the robot has since left every segment-cleaning state.
+ * @param {string} duid the device id
+ * @param {object} ids external ids of the Gladys robot
+ * @param {object} status get_status result
+ * @param {boolean} hasRoomSelector whether the robot exposes rooms
+ * @returns {object|null} a Gladys text state to publish, or null
+ */
+function buildRoomSelectionFeedback(duid, ids, status, hasRoomSelector) {
+  if (!hasRoomSelector) {
+    return null;
+  }
+
+  const robotState = Number(status && status.state);
+  const isSegmentCleaning = ROBOROCK_SEGMENT_CLEANING_STATES.has(robotState);
+  const trackedCleaning = roomCleanings.get(duid);
+
+  if (isSegmentCleaning) {
+    roomCleanings.set(duid, { active: true });
+    initializedRoomSelectors.add(duid);
+    return null;
+  }
+
+  const shouldReset = trackedCleaning?.active === true || !initializedRoomSelectors.has(duid);
+  initializedRoomSelectors.add(duid);
+
+  if (!shouldReset) {
+    return null;
+  }
+
+  roomCleanings.delete(duid);
+
+  return {
+    device_feature_external_id: ids.feature(FEATURE_CODES.ROOM),
+    text: ROOM_SELECTION_NONE,
+  };
+}
 
 /**
  * Split a device external id (`ext:<selector>:vacuum:<did>`, built with
@@ -121,8 +186,27 @@ async function connect() {
  */
 async function publishDevices() {
   const devices = xiaomi.listDevices();
-  logger.info(`${devices.length} robot vacuum(s) found`);
-  await gladys.publishDiscoveredDevices(devices.map((device) => convertDevice(gladys, device)));
+  const discovered = [];
+
+  for (const device of devices) {
+    discovered.push(convertDevice(gladys, device));
+    try {
+      // The dock is only published when the robot reports one: the status field
+      // is the only thing that tells a docked model from a bare one.
+      const status = await xiaomi.getStatus(device.duid);
+      const dockType = Number(status && status.dock_type);
+      if (Number.isFinite(dockType) && dockType > 0) {
+        discovered.push(convertDockDevice(gladys, device, dockType));
+      }
+    } catch (err) {
+      logger.warn(`Could not detect a dock for ${device.duid}: ${err.message}`);
+    }
+  }
+
+  logger.info(
+    `${devices.length} robot vacuum(s) and ${discovered.length - devices.length} dock(s) found`,
+  );
+  await gladys.publishDiscoveredDevices(discovered);
 }
 
 /**
@@ -152,18 +236,60 @@ gladys.onSetValue(async (device, feature, value) => {
   const { duid } = parseExternalId(device.external_id);
   const featureCode = feature.external_id.split(':').pop();
 
+  // The empty option only clears the selection. A full clean stays driven by the
+  // run mode alone.
+  if (featureCode === FEATURE_CODES.ROOM && value === ROOM_SELECTION_NONE) {
+    roomCleanings.delete(duid);
+    initializedRoomSelectors.add(duid);
+    return;
+  }
+
   const command = buildSetCommand(featureCode, value);
   if (!command) {
     throw new Error(`Feature "${feature.external_id}" is not controllable with value ${value}`);
   }
   await xiaomi.sendCommand(duid, command.method, command.params);
+
+  if (featureCode === FEATURE_CODES.ROOM) {
+    // The command was accepted, but the robot may not have entered
+    // segment_cleaning yet: the next poll must not reset the selector already.
+    roomCleanings.set(duid, { active: false });
+    initializedRoomSelectors.add(duid);
+  }
 });
 
 // --- Polling: Gladys asks to refresh a device --------------------------------
 gladys.onPoll(async (device) => {
-  const { duid } = parseExternalId(device.external_id);
-  const status = await xiaomi.getStatus(duid);
-  const states = buildPollStates(vacuumExternalIds(gladys, duid), status);
+  const { slug, duid } = parseExternalId(device.external_id);
+  let states;
+
+  if (slug === DOCK_SLUG) {
+    const consumable = await xiaomi.getConsumable(duid);
+    states = buildDockStates(dockExternalIds(gladys, duid), consumable);
+  } else {
+    const [status, consumable] = await Promise.all([
+      xiaomi.getStatus(duid),
+      // Maintenance counters are a bonus: an older model that does not answer
+      // must still report its state.
+      xiaomi.getConsumable(duid).catch((err) => {
+        logger.warn(`Could not get the consumables of ${duid}: ${err.message}`);
+        return null;
+      }),
+    ]);
+    const ids = vacuumExternalIds(gladys, duid);
+    states = [...buildPollStates(ids, status), ...buildConsumableStates(ids, consumable)];
+    const robot = xiaomi.listDevices().find((candidate) => candidate.duid === duid);
+    const roomFeedback = buildRoomSelectionFeedback(
+      duid,
+      ids,
+      status,
+      Boolean(robot?.rooms?.length),
+    );
+    if (roomFeedback) {
+      states.push(roomFeedback);
+    }
+  }
+
   if (states.length > 0) {
     await gladys.publishStates(states);
   }

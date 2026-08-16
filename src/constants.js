@@ -48,6 +48,30 @@ export const VACUUM_CLEANER_CLEAN_MODE = {
 };
 
 export const BATTERY_BOUNDS = { MIN: 0, MAX: 100 };
+export const CONSUMABLE_BOUNDS = { MIN: 0, MAX: 100 };
+export const ROOM_SELECTION_NONE = 'none';
+
+// The states the robot reports while cleaning one segment rather than the whole
+// map. Used to tell an accepted room command from a plain full clean.
+export const ROBOROCK_SEGMENT_CLEANING_STATES = new Set([
+  18, // segment_cleaning
+  6304, // segment_mopping
+  6305, // segment_clean_mop_cleaning
+  6306, // segment_clean_mop_mopping
+]);
+
+// The robot reports how long each part has been used, never how much is left, so
+// the percentages are computed against the manufacturer service intervals. The
+// dock ones count cycles, not seconds.
+export const CONSUMABLE_LIFETIME = {
+  MAIN_BRUSH_SECONDS: 300 * 60 * 60,
+  SIDE_BRUSH_SECONDS: 200 * 60 * 60,
+  FILTER_SECONDS: 150 * 60 * 60,
+  SENSOR_SECONDS: 30 * 60 * 60,
+  DOCK_STRAINER_CYCLES: 150,
+  DOCK_CLEANING_BRUSH_CYCLES: 300,
+  DUST_COLLECTION_CYCLES: 90,
+};
 
 // Devices are polled every 30 seconds. A robot barely changes state while
 // docked; a command triggers an immediate refresh anyway (see index.js).
@@ -83,6 +107,9 @@ export const ROBOROCK_METHOD = {
   SET_FAN_POWER: 'set_custom_mode',
   GET_FAN_POWER: 'get_custom_mode',
   GET_NETWORK_INFO: 'get_network_info',
+  GET_CONSUMABLE: 'get_consumable',
+  APP_SEGMENT_CLEAN: 'app_segment_clean',
+  GET_ROOM_MAPPING: 'get_room_mapping',
 };
 
 // --- Roborock state codes (RoborockStateCode) --------------------------------
@@ -175,4 +202,12 @@ export const FEATURE_CODES = {
   CLEAN_MODE: 'clean-mode',
   DOCK: 'dock',
   BATTERY: 'battery',
+  MAIN_BRUSH: 'main-brush',
+  SIDE_BRUSH: 'side-brush',
+  FILTER: 'filter',
+  SENSOR_CLEANING: 'sensor-cleaning',
+  ROOM: 'room',
+  DOCK_STRAINER: 'dock-strainer',
+  DOCK_CLEANING_BRUSH: 'dock-cleaning-brush',
+  DUST_COLLECTION: 'dust-collection',
 };

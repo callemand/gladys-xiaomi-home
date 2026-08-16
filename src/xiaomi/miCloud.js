@@ -414,6 +414,28 @@ export class MiCloudClient {
   }
 
   /**
+   * Fetch the rooms of the account, flattened across every home.
+   *
+   * Only used to put a name on the robot's map segments, so a failure here is
+   * never fatal: without it the segments simply keep a generic label.
+   * @returns {Promise<Array<{id: string, name: string}>>} the rooms
+   */
+  async getRooms() {
+    const response = await this.request('/v2/homeroom/gethome', {
+      fetch_share: true,
+      fetch_share_dev: true,
+      limit: 300,
+      app_ver: 7,
+    });
+    const homes = (response.result && response.result.homelist) || [];
+    return homes.flatMap((home) =>
+      ((home && home.roomlist) || [])
+        .filter((room) => room && room.id !== undefined && room.id !== null)
+        .map((room) => ({ id: String(room.id), name: String(room.name || '') })),
+    );
+  }
+
+  /**
    * Send an RPC to a device over the cloud.
    * @param {string} did the device id
    * @param {object} rpc the RPC ({ id, method, params })

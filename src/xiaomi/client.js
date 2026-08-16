@@ -10,9 +10,10 @@
 
 import { createLogger } from '@gladysassistant/integration-sdk';
 
-import { XIAOMI_REGIONS } from '../constants.js';
+import { ROBOROCK_METHOD, XIAOMI_REGIONS } from '../constants.js';
 import { MiCloudClient } from './miCloud.js';
 import { MiioLocalTransport } from './miioLocalTransport.js';
+import { normalizeRoomMappings } from './rooms.js';
 
 const logger = createLogger({ name: 'xiaomi:client' });
 
@@ -170,6 +171,7 @@ export class XiaomiClient {
       name: device.name || String(device.did),
       model: device.model || null,
       online: device.isOnline !== false,
+      rooms: [],
     }));
     this.tokens = new Map();
     this.localIps = new Map();
@@ -182,6 +184,35 @@ export class XiaomiClient {
         this.localIps.set(duid, device.localip);
       }
     });
+
+    await this.#loadRooms();
+  }
+
+  /**
+   * Pair each robot's map segments with the room names of the account.
+   *
+   * Neither half is required: a robot that reports no mapping (older models) is
+   * simply published without the room selector, and rooms the account cannot
+   * name keep a generic label.
+   */
+  async #loadRooms() {
+    let cloudRooms = [];
+    try {
+      cloudRooms = await this.cloud.getRooms();
+    } catch (e) {
+      logger.debug(`Could not load the room names: ${e.message}`);
+    }
+
+    await Promise.all(
+      this.devices.map(async (device) => {
+        try {
+          const mapping = await this.#execute(device.duid, ROBOROCK_METHOD.GET_ROOM_MAPPING, []);
+          device.rooms = normalizeRoomMappings(mapping, cloudRooms);
+        } catch (e) {
+          logger.warn(`Could not load the rooms of ${device.duid}: ${e.message}`);
+        }
+      }),
+    );
   }
 
   // --- Common ----------------------------------------------------------------
@@ -201,6 +232,16 @@ export class XiaomiClient {
    */
   async getStatus(duid) {
     const result = await this.#execute(duid, 'get_status', []);
+    return Array.isArray(result) ? result[0] : result;
+  }
+
+  /**
+   * Fetch the maintenance counters of one robot and its dock.
+   * @param {string} duid the device id
+   * @returns {Promise<object>} the get_consumable result
+   */
+  async getConsumable(duid) {
+    const result = await this.#execute(duid, ROBOROCK_METHOD.GET_CONSUMABLE, []);
     return Array.isArray(result) ? result[0] : result;
   }
 

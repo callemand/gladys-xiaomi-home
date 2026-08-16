@@ -35,13 +35,29 @@ working region is remembered so a restart does not probe them again.
 
 Each **robot** exposes these features:
 
-| Feature    | Category / type                 | Mapping                                            |
-| ---------- | ------------------------------- | -------------------------------------------------- |
-| State      | `vacuum-cleaner` / `state`      | miIO `state` → Gladys state (read-only)            |
-| Run mode   | `vacuum-cleaner` / `run-mode`   | Idle / Clean → `app_stop` / `app_start`            |
-| Clean mode | `vacuum-cleaner` / `clean-mode` | miIO `fan_power` ↔ Gladys clean mode (table below) |
-| Dock       | `vacuum-cleaner` / `dock`       | "Go home" (value 1) → `app_charge`                 |
-| Battery    | `battery` / `integer`           | miIO `battery` (%), read-only, history kept        |
+| Feature         | Category / type                  | Mapping                                                  |
+| --------------- | -------------------------------- | -------------------------------------------------------- |
+| State           | `vacuum-cleaner` / `state`       | miIO `state` → Gladys state (read-only)                  |
+| Run mode        | `vacuum-cleaner` / `run-mode`    | Idle / Clean → `app_stop` / `app_start`                  |
+| Clean mode      | `vacuum-cleaner` / `clean-mode`  | miIO `fan_power` ↔ Gladys clean mode (table below)       |
+| Dock            | `vacuum-cleaner` / `dock`        | "Go home" (value 1) → `app_charge`                       |
+| Battery         | `battery` / `integer`            | miIO `battery` (%), read-only, history kept              |
+| Main brush      | `maintenance` / `life-remaining` | miIO `get_consumable`, % left, read-only, history kept   |
+| Side brush      | `maintenance` / `life-remaining` | miIO `get_consumable`, % left, read-only, history kept   |
+| Filter          | `maintenance` / `life-remaining` | miIO `get_consumable`, % left, read-only, history kept   |
+| Sensor cleaning | `maintenance` / `life-remaining` | miIO `get_consumable`, % left, read-only, history kept   |
+| Room to clean   | `text` / `select`                | `get_room_mapping` → `app_segment_clean` on that segment |
+
+The **room selector** is only exposed when the robot returns a map: its segments
+come from the robot, their names from the rooms of the Mi Home account. A segment
+the account cannot name keeps a generic label, so the selector still works.
+Picking a room starts the clean; the empty option only clears the selection, and
+a full clean stays driven by the run mode alone.
+
+A robot that reports a **station** (`dock_type`) also publishes it as its own
+Gladys device, with three maintenance features: strainer, cleaning brush and dust
+collection. The robot reports how long each part has been _used_, so the
+percentages are computed against the manufacturer service intervals.
 
 ### Fan power ↔ clean mode
 
@@ -101,6 +117,10 @@ exercises the silent `passToken` login, discovery, polling and commands.
 - **Robot vacuums only.** The name matches the app, but a Xiaomi Home account
   carries many other device types and none of them is handled here.
 - Only the miIO protocol family is implemented.
+- **No routines.** The sibling Roborock integration exposes the account routines
+  as buttons, but those are Roborock cloud scenes; a Mi Home scene is a different
+  API entirely and is not implemented here. Everything else the robot itself
+  knows — maintenance counters, map segments — is available in both.
 - Suction-level codes vary across model generations; the table above targets the
   modern codes. If your model reports different values, open an issue with the
   `fan_power` seen in the debug logs.

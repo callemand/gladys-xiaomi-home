@@ -36,7 +36,31 @@ export const STATUS = {
   fan_power: 102, // balanced
   in_cleaning: 0,
   in_returning: 0,
+  dock_type: 21, // a robot with a station: the dock is published as its own device
 };
+
+// A realistic get_consumable result: the robot reports time USED, never left.
+export const CONSUMABLE = {
+  main_brush_work_time: 150 * 60 * 60, // half of its 300 h life
+  side_brush_work_time: 50 * 60 * 60,
+  filter_work_time: 15 * 60 * 60,
+  sensor_dirty_time: 15 * 60 * 60,
+  strainer_work_times: 15,
+  cleaning_brush_work_times: 30,
+  dust_collection_work_times: 9,
+};
+
+// A get_room_mapping result: segment id of the active map -> cloud room id.
+export const ROOM_MAPPING = [
+  [16, '1000001'],
+  [17, '1000002'],
+];
+
+// The rooms of the account (/v2/homeroom/gethome), which put a name on them.
+export const MI_HOME_ROOMS = [
+  { id: '1000001', name: 'Cuisine' },
+  { id: '1000002', name: 'Salon' },
+];
 
 // Xiaomi login secret (base64) used by the fake cloud in tests.
 export const SSECURITY = Buffer.from('0123456789abcdef').toString('base64');
