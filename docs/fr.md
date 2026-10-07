@@ -47,6 +47,10 @@ passent ensuite en priorité par le **réseau local** (protocole miIO chiffré),
 avec un repli sur le cloud si le robot n'est pas joignable. Le mode de
 communication utilisé est affiché sous forme de badge sur l'appareil.
 
+Désactivez **Privilégier la connexion locale (LAN) quand elle est disponible**
+dans les paramètres de l'intégration pour faire passer les commandes d'abord par
+le cloud Xiaomi, avec le réseau local en repli.
+
 ## Limites
 
 - **Aspirateurs robots uniquement.** Le nom reprend celui de l'application, mais

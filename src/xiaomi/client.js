@@ -5,7 +5,8 @@
 // captcha) and the resulting session is persisted, so every later start
 // reconnects silently. The cloud yields each robot's miIO local token + LAN IP,
 // so commands then prefer the LOCAL transport (encrypted UDP) and fall back to
-// a cloud RPC when the robot is not reachable on the LAN.
+// a cloud RPC when the robot is not reachable on the LAN. When the user turns
+// off "Prefer the local connection" in Gladys, the order is reversed.
 // -----------------------------------------------------------------------------
 
 import { createLogger } from '@gladysassistant/integration-sdk';
@@ -43,9 +44,13 @@ export class XiaomiClient {
    * @param {object} [session] the persisted Xiaomi session (see session.js).
    *   Everything the integration needs is discovered or remembered — there is
    *   no user-facing configuration at all.
+   * @param {object} [options]
+   * @param {boolean} [options.preferLocal] false to send RPCs through the cloud
+   *   first (the Gladys "Prefer the local connection" toggle); defaults to true
    */
-  constructor(session = {}) {
+  constructor(session = {}, { preferLocal = true } = {}) {
     this.session = session;
+    this.preferLocal = preferLocal;
     this.cloud = null;
     this.devices = [];
     this.tokens = new Map(); // duid -> Buffer token
@@ -265,13 +270,32 @@ export class XiaomiClient {
     return this.lastTransport.get(duid) || null;
   }
 
+  /**
+   * Apply the user's "Prefer the local connection" choice to the next RPCs.
+   * @param {boolean} preferLocal false to go through the cloud first
+   */
+  setPreferLocal(preferLocal) {
+    this.preferLocal = preferLocal;
+  }
+
   async #execute(duid, method, params) {
+    if (!this.preferLocal && this.cloud) {
+      try {
+        return await this.#cloudRpc(duid, method, params);
+      } catch (e) {
+        const local = this.#getLocalTransport(duid);
+        if (!local) {
+          throw e;
+        }
+        logger.warn(`Cloud request failed for ${duid}, falling back to local: ${e.message}`);
+        return this.#localRpc(local, duid, method, params);
+      }
+    }
+
     const local = this.#getLocalTransport(duid);
     if (local) {
       try {
-        const result = await local.request(method, params);
-        this.lastTransport.set(duid, 'local');
-        return result;
+        return await this.#localRpc(local, duid, method, params);
       } catch (e) {
         if (!this.cloud) {
           throw e; // local mode: no fallback
@@ -283,6 +307,16 @@ export class XiaomiClient {
     if (!this.cloud) {
       throw new Error(`Robot ${duid} is not reachable locally`);
     }
+    return this.#cloudRpc(duid, method, params);
+  }
+
+  async #localRpc(local, duid, method, params) {
+    const result = await local.request(method, params);
+    this.lastTransport.set(duid, 'local');
+    return result;
+  }
+
+  async #cloudRpc(duid, method, params) {
     const result = await this.cloud.rpc(duid, { id: nextRpcId(), method, params });
     this.lastTransport.set(duid, 'cloud');
     return result;
