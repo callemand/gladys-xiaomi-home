@@ -1,6 +1,6 @@
 {
   "name": "gladys-xiaomi-home",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "Gladys Assistant integration for Xiaomi Home robot vacuums (miIO)",
   "type": "module",
