@@ -258,7 +258,16 @@ export class MiCloudClient {
     } catch {
       return false; // the long poll timed out: nobody scanned yet
     }
-    const data = parseXiaomiJson(text);
+    let data;
+    try {
+      data = parseXiaomiJson(text);
+    } catch {
+      // Once Xiaomi has rejected the sign-in page (lpLogin/result?code=10012,
+      // "Invalid request"), the long poll answers with an HTML error page: the
+      // session is dead, and polling it again would only get the same page.
+      this.qrLogin = null;
+      throw new Error('Xiaomi rejected the sign-in session');
+    }
     if (!data || !data.passToken) {
       return false;
     }

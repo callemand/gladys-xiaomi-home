@@ -108,7 +108,11 @@ exercises the silent `passToken` login, discovery, polling and commands.
   so the request-id counter is seeded from the clock instead of restarting at 1.
 - The sign-in page must be opened with **`noreferrer`**: a cross-site `Referer`
   makes Xiaomi answer `lpLogin/result?code=10012` ("Invalid request"). Only the
-  `Referer` matters — `Sec-Fetch-Site` alone is fine.
+  `Referer` matters — `Sec-Fetch-Site` alone is fine. Gladys only does that for
+  an **`account_link`** field (an `oauth2` one is opened with a `Referer`), which
+  is why the account field has that type. Once the page is rejected, the long
+  poll answers with an HTML error page: the integration then reports the failure
+  and waits for a new click on Connect.
 - The Xiaomi **password** login is gated behind a captcha and an
   identity-verification step; it is not usable from a headless container, which
   is why the QR sign-in is the only supported way to link an account.

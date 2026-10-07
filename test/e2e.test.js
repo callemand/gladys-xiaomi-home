@@ -117,9 +117,12 @@ function startFakeXiaomi() {
         }
         res.writeHead(200, { 'Set-Cookie': 'serviceToken=svc-token-123; Path=/' });
         res.end('ok');
+      } else if (url.pathname === '/longPolling/login' && url.searchParams.get('lp') === '1') {
+        // What Xiaomi answers once it has rejected the sign-in page (code 10012)
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<!DOCTYPE html><html><body>Invalid request</body></html>');
       } else if (url.pathname === '/longPolling/loginUrl') {
-        // Shaped like the real answer: the sign-in URL carries ticket/dc/sid/ts
-        // and NO `state` — the integration is the one that has to add it.
+        // Shaped like the real answer: the sign-in URL carries ticket/dc/sid/ts.
         res.end(
           `&&&START&&&${JSON.stringify({
             lp: `${base}/longPolling/login?lp=1`,
@@ -330,11 +333,11 @@ test('the integration discovers, polls and controls a Xiaomi/Roborock robot', as
     assert.equal(gladys.state.discoveredDevicePosts.at(-1).length, 2);
   });
 
-  await t.test('the authorize URL carries a state, as the Gladys frontend requires', async () => {
+  await t.test('Connect returns the Xiaomi sign-in URL as is', async () => {
+    // an account_link field: Gladys sends no redirect_uri and checks no state
     send('external-integration.oauth.get-authorize-url', {
       message_id: 'oauth-1',
       key: 'xiaomi_account',
-      redirect_uri: 'https://my.gladysassistant.com/redirect/oauth',
     });
     await waitUntil(
       () => gladys.state.commandResults.some((r) => r.message_id === 'oauth-1'),
@@ -343,14 +346,23 @@ test('the integration discovers, polls and controls a Xiaomi/Roborock robot', as
     const ack = gladys.state.commandResults.find((r) => r.message_id === 'oauth-1');
     assert.equal(ack.success, true, ack.error);
 
-    // Since Gladys 4.84.4 the frontend refuses an authorize URL without a
-    // `state`, and Xiaomi never provides one: the integration must add it.
-    const url = new URL(ack.data.authorize_url);
-    assert.match(url.searchParams.get('state'), /^[0-9a-f]{32}$/);
-    // ...without disturbing what Xiaomi actually reads.
-    assert.equal(url.searchParams.get('ticket'), 'lp_42');
-    assert.equal(url.searchParams.get('sid'), 'xiaomiio');
-    assert.equal(url.searchParams.get('dc'), 'eu');
+    assert.equal(
+      ack.data.authorize_url,
+      `http://127.0.0.1:${xiaomi.port}/longPolling/login?ticket=lp_42&dc=eu&sid=xiaomiio&ts=1700000000`,
+    );
+  });
+
+  await t.test('a sign-in page rejected by Xiaomi is reported, not a crash', async () => {
+    // The fake long poll answers like Xiaomi after a code 10012: an HTML page.
+    await waitUntil(
+      () =>
+        gladys.state.connectionStatusPosts.some(
+          (post) => post.connected === false && /rejected/.test(post.message?.en ?? ''),
+        ),
+      `rejection status\n${output}`,
+    );
+    assert.doesNotMatch(output, /SyntaxError/);
+    assert.equal(child.exitCode, null, 'the integration is still running');
   });
 
   const pollDevice = {

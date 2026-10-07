@@ -19,8 +19,6 @@
 // The SDK reads them automatically: `new GladysIntegration()` is enough.
 // -----------------------------------------------------------------------------
 
-import crypto from 'node:crypto';
-
 import { GladysIntegration, logger } from '@gladysassistant/integration-sdk';
 
 import {
@@ -313,41 +311,28 @@ gladys.onPoll(async (device) => {
 // Gladys opens the URL we return in the user's browser. Xiaomi is NOT an OAuth2
 // provider: this is its QR sign-in page. The user approves it there, and we learn
 // about it through the long poll below — Xiaomi redirects to its own STS
-// endpoint, never back to Gladys, so no callback is involved.
+// endpoint, never back to Gladys, so no callback is involved. Hence an
+// `account_link` field, which Gladys opens with `noreferrer`: an `oauth2` one
+// carries the Gladys address as Referer, and Xiaomi rejects it (code 10012).
 gladys.onOAuthAuthorizeUrl(async () => {
   logger.info('Connect -> starting the Xiaomi sign-in');
   const { loginUrl } = await xiaomi.startAccountLink();
-  // Watch for the approval in the background: the URL must be returned right
-  // away, the user needs the page open BEFORE they can approve anything.
-  waitForAccountLink().catch((err) => logger.error('Account link failed', err));
   await reportStatus(false, {
     en: 'Sign in on the Xiaomi page that just opened. This screen updates on its own.',
     fr: "Connectez-vous sur la page Xiaomi qui vient de s'ouvrir. Cet écran se met à jour tout seul.",
   });
-  return withPlaceholderState(loginUrl);
+  // Watch for the approval in the background: the URL must be returned right
+  // away, the user needs the page open BEFORE they can approve anything. Started
+  // after the prompt above, so that a failure is never overwritten by it.
+  waitForAccountLink().catch(async (err) => {
+    logger.error('Account link failed', err);
+    await reportStatus(false, {
+      en: `The Xiaomi sign-in failed: ${err.message}. Click Connect again.`,
+      fr: `La connexion Xiaomi a échoué : ${err.message}. Cliquez à nouveau sur Connecter.`,
+    });
+  });
+  return loginUrl;
 });
-
-/**
- * Add a placeholder anti-CSRF `state` to the Xiaomi sign-in URL.
- *
- * Since Gladys 4.84.4 the frontend refuses an authorize URL without a `state`,
- * and rewrites it to carry the address of the instance across the round trip.
- * That is right for a real OAuth2 provider; the Xiaomi QR sign-in is not one:
- * nothing ever redirects back to Gladys, the approval is learned through the
- * long poll, so there is no state for us to verify either.
- *
- * A placeholder therefore satisfies the frontend without changing anything for
- * Xiaomi. Verified against the real endpoint: Xiaomi ignores an unknown `state`
- * — the page it redirects to is byte-identical with and without it, and its
- * `followup` URL keeps only ticket/dc/sid/ts.
- * @param {string} loginUrl the sign-in URL returned by Xiaomi
- * @returns {string} the same URL, carrying a state
- */
-function withPlaceholderState(loginUrl) {
-  const url = new URL(loginUrl);
-  url.searchParams.set('state', crypto.randomBytes(16).toString('hex'));
-  return url.toString();
-}
 
 /**
  * Await the approval of a pending account link, then persist the session,
