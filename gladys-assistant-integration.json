@@ -15,7 +15,7 @@
   "config_schema": [
     {
       "key": "xiaomi_account",
-      "type": "oauth2",
+      "type": "account_link",
       "label": {
         "en": "Xiaomi account",
         "fr": "Compte Xiaomi"

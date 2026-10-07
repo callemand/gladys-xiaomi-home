@@ -24,7 +24,9 @@ test('the account field is the whole configuration: nothing for the user to type
   assert.equal(manifest.config_schema.length, 1);
   const [field] = manifest.config_schema;
   assert.equal(field.key, 'xiaomi_account');
-  assert.ok(['oauth2', 'account_link'].includes(field.type), `unexpected type ${field.type}`);
+  // NOT oauth2: Gladys opens an oauth2 sign-in page with a Referer, and Xiaomi
+  // rejects it (code 10012). Only an account_link one is opened with noreferrer.
+  assert.equal(field.type, 'account_link');
   assert.ok(field.label.en, 'the account field needs an English label');
 });
 
