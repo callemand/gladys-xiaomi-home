@@ -51,7 +51,20 @@ const gladys = new GladysIntegration();
 // account link lives in off-schema config keys, so a restart never needs it
 // again.
 let session = readSession();
+// The one setting Gladys itself renders, because the manifest declares both
+// the local and the cloud transports: the reserved, read-only key
+// GLADYS_PREFER_LOCAL ("Prefer the local connection", true unless turned off).
+let preferLocal = true;
 let xiaomi = new XiaomiClient(session);
+
+/**
+ * Read the user's transport preference from the integration config.
+ * @param {Record<string, unknown>} config the config returned by Gladys
+ * @returns {boolean} false only when the user turned the toggle off
+ */
+function readPreferLocal(config = {}) {
+  return config.GLADYS_PREFER_LOCAL !== false;
+}
 
 // Robots for which a room clean has just been asked. `active` only turns true
 // once the robot has actually been seen in a segment-cleaning state.
@@ -159,14 +172,14 @@ async function reportStatus(connected, message) {
 async function connect() {
   await xiaomi.logout();
   if (!isSessionUsable(session)) {
-    xiaomi = new XiaomiClient({});
+    xiaomi = new XiaomiClient({}, { preferLocal });
     logger.warn('Xiaomi account not linked yet: click Connect in the integration settings');
     // No message: the red badge next to the account says it, and the field
     // description already explains what to do.
     await reportStatus(false);
     return false;
   }
-  xiaomi = new XiaomiClient(session);
+  xiaomi = new XiaomiClient(session, { preferLocal });
   try {
     await xiaomi.login();
   } catch (err) {
@@ -368,6 +381,9 @@ async function waitForAccountLink() {
 // saveConfigFromFront. The session comparison below therefore guards against a
 // no-op save from the user, not against a loop of our own making.
 gladys.onConfigUpdated(async (newConfig) => {
+  // The transport preference applies to the next RPC: no reconnection needed.
+  preferLocal = readPreferLocal(newConfig);
+  xiaomi.setPreferLocal(preferLocal);
   const updated = readSession(newConfig);
   if (xiaomi.isLoggedIn() && sameSession(updated, session)) {
     return;
@@ -390,7 +406,9 @@ gladys.onConfigUpdated(async (newConfig) => {
 gladys.on('connected', async () => {
   logger.info('WebSocket connected to Gladys');
   try {
-    session = readSession(await gladys.getConfig());
+    const config = await gladys.getConfig();
+    session = readSession(config);
+    preferLocal = readPreferLocal(config);
     if (await connect()) {
       await publishDevices();
     }

@@ -56,6 +56,16 @@ test('no action is declared, and none is handled', () => {
   assert.deepEqual(declared, handled);
 });
 
+test('both transports are declared, and the local preference is honored', () => {
+  // The store tags the integration Local and Cloud from this field, and Gladys
+  // renders its "Prefer the local connection" toggle only when both are there.
+  assert.deepEqual([...manifest.transports].sort(), ['cloud', 'local']);
+  assert.ok(
+    indexSource.includes('GLADYS_PREFER_LOCAL'),
+    'the toggle Gladys renders for a dual-transport integration must be read',
+  );
+});
+
 test('the docker image tag matches the manifest version', () => {
   assert.equal(
     manifest.docker_image.endsWith(`:${manifest.version}`),

@@ -43,6 +43,10 @@ the **local network** first (encrypted miIO protocol), falling back to the cloud
 when a robot is unreachable. The transport in use is shown as a badge on the
 device.
 
+Turn off **Prefer the local (LAN) connection when available** in the
+integration settings to send commands through the Xiaomi cloud first instead,
+with the local network as the fallback.
+
 ## Limitations
 
 - **Robot vacuums only.** The name matches the app, but a Xiaomi Home account

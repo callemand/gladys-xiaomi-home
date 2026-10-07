@@ -28,6 +28,10 @@ Built on the JavaScript SDK
 - **Talks to each robot over the LAN** with the miIO protocol (encrypted UDP on
   port 54321) and falls back to a Xiaomi cloud RPC when the robot is not
   reachable locally. The transport in use is shown as a badge on the device.
+  The manifest declares both transports, so the store tags the integration
+  **Local** and **Cloud**, and Gladys adds its standard "Prefer the local (LAN)
+  connection" toggle: turned off, commands go through the cloud first and fall
+  back to the LAN.
 
 There is **nothing to configure**: the Xiaomi server region, the robots, their
 local keys and their IP addresses are all discovered automatically, and the
