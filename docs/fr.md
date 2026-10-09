@@ -64,6 +64,10 @@ fournissent.
 > l'opération n'est nécessaire **qu'une seule fois** : la session est mémorisée
 > et réutilisée automatiquement après un redémarrage.
 
+Pour utiliser un autre compte Xiaomi, ou après avoir révoqué l'accès, cliquez
+sur **Déconnecter** : Gladys oublie la session et redémarre l'intégration, puis
+**Connecter** permet de lier à nouveau un compte.
+
 Il n'y a **rien à configurer** : la région du serveur Xiaomi, vos robots, leurs
 clés de chiffrement locales et leurs adresses IP sont tous découverts
 automatiquement.
