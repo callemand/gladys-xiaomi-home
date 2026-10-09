@@ -1,13 +1,8 @@
 {
   "manifest_version": 1,
   "type": "device",
-  "categories": [
-    "appliances"
-  ],
-  "transports": [
-    "local",
-    "cloud"
-  ],
+  "categories": ["appliances"],
+  "transports": ["local", "cloud"],
   "name": "Xiaomi Home",
   "description": {
     "en": "Robot vacuums paired in the Xiaomi Home app: state, start/stop, fan power, dock, battery.",
