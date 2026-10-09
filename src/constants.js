@@ -111,6 +111,7 @@ export const ROBOROCK_METHOD = {
   GET_CLEAN_SUMMARY: 'get_clean_summary',
   APP_SEGMENT_CLEAN: 'app_segment_clean',
   GET_ROOM_MAPPING: 'get_room_mapping',
+  GET_MAP_V1: 'get_map_v1',
 };
 
 // --- Roborock state codes (RoborockStateCode) --------------------------------

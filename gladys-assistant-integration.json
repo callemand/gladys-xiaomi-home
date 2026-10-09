@@ -26,6 +26,162 @@
       }
     }
   ],
+  "widgets": [
+    {
+      "key": "map",
+      "label": {
+        "en": "Vacuum",
+        "fr": "Aspirateur"
+      },
+      "icon": "wind",
+      "settings": [
+        {
+          "key": "vacuum",
+          "type": "select",
+          "source": "devices",
+          "required": true,
+          "label": {
+            "en": "Vacuum",
+            "fr": "Aspirateur"
+          }
+        },
+        {
+          "key": "action1",
+          "type": "select",
+          "default": "quiet",
+          "label": {
+            "en": "Action button 3",
+            "fr": "Bouton action 3"
+          },
+          "options": [
+            {
+              "value": "none",
+              "label": {
+                "en": "None",
+                "fr": "Aucun"
+              }
+            },
+            {
+              "value": "start",
+              "label": {
+                "en": "Start",
+                "fr": "Démarrer"
+              }
+            },
+            {
+              "value": "stop",
+              "label": {
+                "en": "Stop",
+                "fr": "Arrêter"
+              }
+            },
+            {
+              "value": "dock",
+              "label": {
+                "en": "Dock",
+                "fr": "Retour base"
+              }
+            },
+            {
+              "value": "quiet",
+              "label": {
+                "en": "Quiet",
+                "fr": "Silencieux"
+              }
+            },
+            {
+              "value": "balanced",
+              "label": {
+                "en": "Balanced",
+                "fr": "Équilibré"
+              }
+            },
+            {
+              "value": "turbo",
+              "label": {
+                "en": "Turbo",
+                "fr": "Turbo"
+              }
+            },
+            {
+              "value": "max",
+              "label": {
+                "en": "Max",
+                "fr": "Max"
+              }
+            }
+          ]
+        },
+        {
+          "key": "action2",
+          "type": "select",
+          "default": "turbo",
+          "label": {
+            "en": "Action button 4",
+            "fr": "Bouton action 4"
+          },
+          "options": [
+            {
+              "value": "none",
+              "label": {
+                "en": "None",
+                "fr": "Aucun"
+              }
+            },
+            {
+              "value": "start",
+              "label": {
+                "en": "Start",
+                "fr": "Démarrer"
+              }
+            },
+            {
+              "value": "stop",
+              "label": {
+                "en": "Stop",
+                "fr": "Arrêter"
+              }
+            },
+            {
+              "value": "dock",
+              "label": {
+                "en": "Dock",
+                "fr": "Retour base"
+              }
+            },
+            {
+              "value": "quiet",
+              "label": {
+                "en": "Quiet",
+                "fr": "Silencieux"
+              }
+            },
+            {
+              "value": "balanced",
+              "label": {
+                "en": "Balanced",
+                "fr": "Équilibré"
+              }
+            },
+            {
+              "value": "turbo",
+              "label": {
+                "en": "Turbo",
+                "fr": "Turbo"
+              }
+            },
+            {
+              "value": "max",
+              "label": {
+                "en": "Max",
+                "fr": "Max"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
   "scene_triggers": [
     {
       "key": "cleaning_started",

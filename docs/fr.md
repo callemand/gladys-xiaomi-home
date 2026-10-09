@@ -40,6 +40,18 @@ ex. « Cuisine, Salon ») ou régler la puissance d'aspiration.
 
 Les scènes nécessitent Gladys 5.1.0 ou plus récent.
 
+## Widget carte
+
+Ajoutez le widget **Aspirateur** à un tableau de bord et choisissez votre robot :
+il affiche la batterie, la surface nettoyée, la carte avec vos pièces, l'état et
+l'usure de chaque consommable, avec les boutons Démarrer et Retour base, plus
+deux boutons que vous choisissez dans ses paramètres. Pendant un nettoyage, la
+carte se met à jour environ toutes les 15 secondes.
+
+La carte passe par le **cloud Xiaomi**, même quand le robot répond sur votre
+réseau local, et seuls les robots fabriqués par Roborock (S5, S6, S7…) la
+fournissent.
+
 ## Configuration
 
 1. Cliquez sur **Connecter** : la page de connexion Xiaomi s'ouvre.

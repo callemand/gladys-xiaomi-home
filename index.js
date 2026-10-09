@@ -11,6 +11,7 @@
 //   - answers the polls of Gladys with the current robot status, and fires the
 //     scene triggers on the transitions it sees between two polls;
 //   - runs the scene actions (start, pause, stop, dock, rooms, fan power);
+//   - serves the map dashboard widget (map fetched through the Xiaomi cloud);
 //   - forwards user commands to the robot over the LAN (encrypted miIO on UDP
 //     54321), falling back to a Xiaomi cloud RPC when it is unreachable.
 //
@@ -21,6 +22,8 @@
 // The SDK reads them automatically: `new GladysIntegration()` is enough.
 // -----------------------------------------------------------------------------
 
+import { createHash } from 'node:crypto';
+
 import { GladysIntegration, logger } from '@gladysassistant/integration-sdk';
 
 import {
@@ -30,6 +33,13 @@ import {
   dockExternalIds,
   vacuumExternalIds,
 } from './src/devices/convertDevice.js';
+import {
+  MAP_WIDGET_KEY,
+  buildMapWidgetContent,
+  duidFromImageKey,
+  mapImageKey,
+} from './src/devices/mapWidget.js';
+import { renderMapPngBase64 } from './src/map/mapRender.js';
 import {
   buildConsumableStates,
   buildDockStates,
@@ -89,6 +99,10 @@ const initializedRoomSelectors = new Set();
 // the integration starts.
 const sceneSnapshots = new Map();
 
+// Robots with a cleaning session in progress: the map widget is refreshed faster
+// (and cached more briefly) for them, so the map is near real-time while cleaning.
+const cleaningDuids = new Set();
+
 /**
  * Detect the robot transitions since the last poll and fire the matching scene
  * triggers. Never throws: a trigger failure must not break the poll.
@@ -110,6 +124,12 @@ async function publishSceneTriggers(device, duid, status, consumable) {
     });
     for (const event of events) {
       await gladys.publishSceneEvent(event.key, event.data);
+    }
+
+    if (snapshot.sessionActive) {
+      cleaningDuids.add(duid);
+    } else {
+      cleaningDuids.delete(duid);
     }
   } catch (err) {
     logger.warn(`Could not publish scene triggers for ${duid}: ${err.message}`);
@@ -500,6 +520,127 @@ gladys.onPoll(async (device) => {
     await gladys.publishStates(states);
   }
   await publishTransport(duid, device.external_id);
+});
+
+// --- Map dashboard widget ----------------------------------------------------
+// The map is exposed as a dashboard widget (SDK >= 0.14), not a device: Gladys
+// pulls the content (onWidgetGet) and the image bytes (onWidgetGetImage). A small
+// cache holds the last rendered PNG per image key so the two calls of one refresh
+// do not fetch the map twice; on a cold cache the duid is recovered from the key.
+const MAP_IMAGE_CACHE_MAX = 8;
+const mapImageCache = new Map(); // imageKey -> PNG base64
+
+function cacheMapImage(key, base64) {
+  mapImageCache.set(key, base64);
+  while (mapImageCache.size > MAP_IMAGE_CACHE_MAX) {
+    mapImageCache.delete(mapImageCache.keys().next().value);
+  }
+}
+
+// Short-lived parsed-map + PNG cache per robot, with in-flight de-duplication.
+// Without it every dashboard refresh (content ttl) and every image cache-miss
+// would fire a fresh get_map_v1 + cloud download plus a synchronous PNG render,
+// and concurrent viewers of the same robot would each fetch it. A single
+// in-flight request is shared, and its result is reused for a short window.
+const MAP_RENDER_TTL_MS = 60 * 1000;
+// While a cleaning session is active the map is cached only briefly, so the live
+// refresh nudge (see below) actually produces an up-to-date render each time.
+const MAP_RENDER_TTL_ACTIVE_MS = 8 * 1000;
+// How often to nudge a refresh of open map widgets while a robot is cleaning.
+const MAP_LIVE_REFRESH_MS = 15 * 1000;
+const mapRenderCache = new Map(); // duid -> { at, map, base64, imageKey }
+const mapRenderInFlight = new Map(); // duid -> Promise<{ map, base64, imageKey }>
+
+// Short, stable marker of the rendered image: the image key changes (and the core
+// swaps the <img>) only when these bytes change, so an unchanged map never flashes.
+function mapSignature(base64) {
+  return createHash('sha1').update(base64).digest('hex').slice(0, 10);
+}
+
+async function renderMapForDuid(duid) {
+  const ttl = cleaningDuids.has(duid) ? MAP_RENDER_TTL_ACTIVE_MS : MAP_RENDER_TTL_MS;
+  const cached = mapRenderCache.get(duid);
+  if (cached && Date.now() - cached.at < ttl) {
+    return cached;
+  }
+  const pending = mapRenderInFlight.get(duid);
+  if (pending) {
+    return pending;
+  }
+  const promise = (async () => {
+    if (!xiaomi.isLoggedIn() && !(await connect())) {
+      throw new Error('The Xiaomi account is not linked yet');
+    }
+    const map = await xiaomi.getMap(duid, { includePixels: true });
+    const base64 = renderMapPngBase64(map);
+    const imageKey = mapImageKey(duid, mapSignature(base64));
+    cacheMapImage(imageKey, base64);
+    const entry = { at: Date.now(), map, base64, imageKey };
+    mapRenderCache.set(duid, entry);
+    return entry;
+  })();
+  mapRenderInFlight.set(duid, promise);
+  try {
+    return await promise;
+  } finally {
+    mapRenderInFlight.delete(duid);
+  }
+}
+
+// Near real-time map while cleaning: drop the cached widget content so every open
+// map widget re-pulls (and re-renders) on a short cadence. The core rate-limits
+// requestWidgetRefresh to 1/10s, and it is a no-op when no widget is open.
+const mapLiveRefresh = setInterval(() => {
+  if (cleaningDuids.size === 0) {
+    return;
+  }
+  try {
+    gladys.requestWidgetRefresh(MAP_WIDGET_KEY);
+  } catch (err) {
+    logger.warn(`Map live refresh nudge failed: ${err.message}`);
+  }
+}, MAP_LIVE_REFRESH_MS);
+if (typeof mapLiveRefresh.unref === 'function') {
+  mapLiveRefresh.unref();
+}
+
+gladys.onWidgetGet(MAP_WIDGET_KEY, async ({ settings }) => {
+  const vacuumExternalId = settings && settings.vacuum;
+  if (!vacuumExternalId) {
+    throw new Error('No vacuum selected for the map widget');
+  }
+  const { duid } = parseExternalId(vacuumExternalId);
+  logger.info(`onWidgetGet(map) <- ${duid}`);
+  const { map, base64, imageKey } = await renderMapForDuid(duid);
+  cacheMapImage(imageKey, base64);
+  // The map image is ready; gather the live numbers for the tiles / status block.
+  const [status, consumables] = await Promise.all([
+    xiaomi.getStatus(duid).catch((err) => {
+      logger.warn(`Widget: could not get the status of ${duid}: ${err.message}`);
+      return {};
+    }),
+    xiaomi
+      .getConsumable(duid)
+      .then((consumable) => consumablePercents(consumable))
+      .catch(() => ({})),
+  ]);
+  await publishTransport(duid, vacuumExternalId);
+  return buildMapWidgetContent(map, { imageKey, vacuumExternalId, status, consumables, settings });
+});
+
+gladys.onWidgetGetImage(async (imageKey) => {
+  const cached = mapImageCache.get(imageKey);
+  if (cached) {
+    return cached;
+  }
+  const duid = duidFromImageKey(imageKey);
+  if (!duid) {
+    throw new Error(`Unknown map image key: ${imageKey}`);
+  }
+  logger.info(`onWidgetGetImage <- re-rendering ${duid} (cache miss)`);
+  const { base64 } = await renderMapForDuid(duid);
+  cacheMapImage(imageKey, base64);
+  return base64;
 });
 
 // --- Linking the account (the Connect button of the account field) -----------

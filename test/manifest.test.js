@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 import { SESSION_KEYS } from '../src/session.js';
+import { MAP_WIDGET_KEY, WIDGET_ACTIONS } from '../src/devices/mapWidget.js';
 import { SCENE_ACTIONS } from '../src/devices/sceneActions.js';
 import {
   SCENE_TRIGGERS,
@@ -140,6 +141,24 @@ test('the scene actions declared are exactly the ones handled', () => {
     assert.ok(
       indexSource.includes(`gladys.onSceneAction(SCENE_ACTIONS.${name},`),
       `scene action "${key}" has no handler`,
+    );
+  });
+});
+
+test('the map widget is declared, handled, and offers only known buttons', () => {
+  assert.deepEqual(
+    manifest.widgets.map((widget) => widget.key),
+    [MAP_WIDGET_KEY],
+  );
+  assert.ok(indexSource.includes('gladys.onWidgetGet(MAP_WIDGET_KEY,'), 'no widget handler');
+  assert.ok(indexSource.includes('gladys.onWidgetGetImage('), 'no widget image handler');
+  const [widget] = manifest.widgets;
+  ['action1', 'action2'].forEach((key) => {
+    const setting = widget.settings.find((candidate) => candidate.key === key);
+    assert.deepEqual(
+      setting.options.map((option) => option.value).sort(),
+      ['none', ...Object.keys(WIDGET_ACTIONS)].sort(),
+      `the "${key}" options must match WIDGET_ACTIONS`,
     );
   });
 });

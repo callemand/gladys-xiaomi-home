@@ -10,6 +10,8 @@ import dgram from 'node:dgram';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
+import { validateWidgetContent } from '@gladysassistant/integration-sdk';
 import { WebSocketServer } from 'ws';
 
 import { rc4, signedNonce } from '../src/xiaomi/miCrypto.js';
@@ -26,6 +28,7 @@ import {
   STATUS,
   TOKEN_HEX,
 } from './fixtures.js';
+import { buildSyntheticMap } from './helpers/syntheticMap.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SELECTOR = 'xiaomi-home-test';
@@ -66,6 +69,7 @@ function startFakeDevice() {
       get_consumable: [CONSUMABLE],
       get_clean_summary: CLEAN_SUMMARY,
       get_room_mapping: ROOM_MAPPING,
+      get_map_v1: [MAP_NAME],
     };
     const result = results[req.method] || ['ok'];
     const payload = Buffer.from(JSON.stringify({ id: req.id, result }));
@@ -87,6 +91,9 @@ function startFakeDevice() {
 // the fake /sts below only hands out the serviceToken when the clientSign was
 // built from every digit of it, so a JSON.parse precision regression fails here.
 const LOGIN_NONCE = '8847478910111751168';
+
+// The map file name the robot answers get_map_v1 with; the fake cloud serves it.
+const MAP_NAME = 'robomap/123456/7';
 
 function startFakeXiaomi() {
   const key = (nonce) => Buffer.from(signedNonce(SSECURITY, nonce), 'base64');
@@ -149,6 +156,16 @@ function startFakeXiaomi() {
           result: { homelist: [{ id: 'home-1', name: 'Maison', roomlist: MI_HOME_ROOMS }] },
         });
         res.end(rc4(key(nonce), Buffer.from(responseJson)).toString('base64'));
+      } else if (url.pathname === '/app/home/getmapfileurl') {
+        const form = new URLSearchParams(body);
+        const nonce = form.get('_nonce');
+        // the request params are RC4-encrypted with the same nonce-derived key
+        const data = rc4(key(nonce), Buffer.from(form.get('data'), 'base64')).toString();
+        const objName = JSON.parse(data).obj_name;
+        const result = objName === MAP_NAME ? { url: `${base}/mapfile/7.gz` } : {};
+        res.end(rc4(key(nonce), Buffer.from(JSON.stringify({ result }))).toString('base64'));
+      } else if (url.pathname === '/mapfile/7.gz') {
+        res.end(gzipSync(buildSyntheticMap()));
       } else if (url.pathname.startsWith('/app/home/rpc/')) {
         const form = new URLSearchParams(body);
         const nonce = form.get('_nonce');
@@ -625,5 +642,69 @@ test('the integration discovers, polls and controls a Xiaomi/Roborock robot', as
     );
     assert.equal(events[0].data.duration_min, 30);
     assert.equal(events[0].data.area_m2, 25);
+  });
+
+  // --- Map widget -------------------------------------------------------------
+  await t.test('the map widget content is built from the map the cloud serves', async () => {
+    send('external-integration.widget.get', {
+      message_id: 'widget-1',
+      key: 'map',
+      settings: { vacuum: pollDevice.external_id, action1: 'quiet', action2: 'none' },
+      language: 'fr',
+      units: 'metric',
+    });
+    await waitUntil(
+      () => gladys.state.commandResults.some((r) => r.message_id === 'widget-1'),
+      `widget ack\n${output}`,
+    );
+    const ack = gladys.state.commandResults.find((r) => r.message_id === 'widget-1');
+    assert.equal(ack.success, true, ack.error);
+    const { content } = ack.data;
+    assert.deepEqual(validateWidgetContent(content), [], 'the core accepts the content');
+    const image = content.components.find((component) => component.type === 'image');
+    assert.match(image.key, /^map-[0-9a-f]+-[0-9a-f]+-r\d+$/);
+    assert.ok(
+      device.received.some((r) => r.method === 'get_map_v1'),
+      'get_map_v1 was sent to the robot',
+    );
+    // Start + Dock are fixed, "quiet" is the configured third button.
+    assert.deepEqual(
+      content.components.filter((c) => c.type === 'button').map((c) => c.device_feature),
+      [
+        `${pollDevice.external_id}:run-mode`,
+        `${pollDevice.external_id}:dock`,
+        `${pollDevice.external_id}:clean-mode`,
+      ],
+    );
+
+    send('external-integration.widget.get-image', {
+      message_id: 'widget-image-1',
+      image_key: image.key,
+    });
+    await waitUntil(
+      () => gladys.state.commandResults.some((r) => r.message_id === 'widget-image-1'),
+      `widget image ack\n${output}`,
+    );
+    const imageAck = gladys.state.commandResults.find((r) => r.message_id === 'widget-image-1');
+    assert.equal(imageAck.success, true, imageAck.error);
+    const png = Buffer.from(imageAck.data.image, 'base64');
+    assert.deepEqual([...png.subarray(1, 4)], [...Buffer.from('PNG')], 'a PNG is served');
+  });
+
+  await t.test('a widget with no vacuum selected is refused', async () => {
+    send('external-integration.widget.get', {
+      message_id: 'widget-none',
+      key: 'map',
+      settings: {},
+      language: 'en',
+      units: 'metric',
+    });
+    await waitUntil(
+      () => gladys.state.commandResults.some((r) => r.message_id === 'widget-none'),
+      `widget refusal\n${output}`,
+    );
+    const ack = gladys.state.commandResults.find((r) => r.message_id === 'widget-none');
+    assert.equal(ack.success, false);
+    assert.match(ack.error, /No vacuum selected/);
   });
 });
