@@ -325,6 +325,7 @@ async function connect() {
   if (!isSessionUsable(session)) {
     xiaomi = new XiaomiClient({}, { preferLocal });
     logger.warn('Xiaomi account not linked yet: click Connect in the integration settings');
+    prepareAccountLink();
     // No message: the red badge next to the account says it, and the field
     // description already explains what to do.
     await reportStatus(false);
@@ -338,6 +339,8 @@ async function connect() {
       en: `Connection failed: ${err.message}`,
       fr: `Échec de la connexion : ${err.message}`,
     });
+    // the stored session no longer works: the user will have to link again
+    prepareAccountLink();
     throw err;
   }
   await persistSession();
@@ -650,9 +653,85 @@ gladys.onWidgetGetImage(async (imageKey) => {
 // endpoint, never back to Gladys, so no callback is involved. Hence an
 // `account_link` field, which Gladys opens with `noreferrer`: an `oauth2` one
 // carries the Gladys address as Referer, and Xiaomi rejects it (code 10012).
+//
+// Gladys gives up on the Connect answer after about 5 s, and asking Xiaomi for a
+// sign-in page took 5.1 s on a production host: the button then failed and the
+// page never opened. So the sign-in page is PREPARED beforehand, while the
+// account is not linked, and Connect answers with it at once. Only ONE long poll
+// ever runs: a second click returns the same page, because two polls on one
+// session make Xiaomi reject it.
+
+// Below this, a prepared page is too close to expiring to be handed out.
+const LINK_MIN_REMAINING_MS = 90 * 1000;
+let preparedLink = null; // Promise<{ client, loginUrl, expiresAt }>, or null
+let prepareTimer = null;
+let linkWaiter = null; // the running long poll, at most one
+
+/**
+ * Ask Xiaomi for a sign-in page for the live client, and keep it fresh while
+ * it is not used and the account is still not linked.
+ * @returns {Promise<{ client: XiaomiClient, loginUrl: string, expiresAt: number }>} the page
+ */
+function startSignInPage() {
+  clearTimeout(prepareTimer);
+  const client = xiaomi;
+  const page = client.startAccountLink().then(({ loginUrl, expiresIn }) => {
+    const lifetimeMs = expiresIn * 1000;
+    prepareTimer = setTimeout(
+      () => {
+        if (!linkWaiter && preparedLink === page) {
+          prepareAccountLink();
+        }
+      },
+      Math.max(lifetimeMs - LINK_MIN_REMAINING_MS, 30 * 1000),
+    );
+    prepareTimer.unref?.();
+    return { client, loginUrl, expiresAt: Date.now() + lifetimeMs };
+  });
+  preparedLink = page;
+  page.catch((err) => {
+    logger.warn(`Could not get a Xiaomi sign-in page: ${err.message}`);
+    if (preparedLink === page) {
+      preparedLink = null;
+    }
+  });
+  return page;
+}
+
+/**
+ * Get a sign-in page ready ahead of the click, unless the account is linked.
+ */
+function prepareAccountLink() {
+  if (xiaomi.isLoggedIn()) {
+    clearTimeout(prepareTimer);
+    preparedLink = null;
+    return;
+  }
+  startSignInPage();
+}
+
+/**
+ * The sign-in page to hand out: the prepared one while it is still valid for
+ * the live client, a fresh one otherwise (which may come too late for Gladys,
+ * but the next click will find it ready).
+ * @returns {Promise<{ client: XiaomiClient, loginUrl: string, expiresAt: number }>} the page
+ */
+async function signInPage() {
+  const prepared = preparedLink ? await preparedLink.catch(() => null) : null;
+  if (
+    prepared &&
+    prepared.client === xiaomi &&
+    prepared.client.hasPendingAccountLink() &&
+    prepared.expiresAt - Date.now() > LINK_MIN_REMAINING_MS
+  ) {
+    return prepared;
+  }
+  return startSignInPage();
+}
+
 gladys.onOAuthAuthorizeUrl(async () => {
-  logger.info('Connect -> starting the Xiaomi sign-in');
-  const { loginUrl } = await xiaomi.startAccountLink();
+  logger.info('Connect -> handing out the Xiaomi sign-in page');
+  const page = await signInPage();
   await reportStatus(false, {
     en: 'Sign in on the Xiaomi page that just opened. This screen updates on its own.',
     fr: "Connectez-vous sur la page Xiaomi qui vient de s'ouvrir. Cet écran se met à jour tout seul.",
@@ -660,26 +739,35 @@ gladys.onOAuthAuthorizeUrl(async () => {
   // Watch for the approval in the background: the URL must be returned right
   // away, the user needs the page open BEFORE they can approve anything. Started
   // after the prompt above, so that a failure is never overwritten by it.
-  waitForAccountLink().catch(async (err) => {
-    logger.error('Account link failed', err);
-    await reportStatus(false, {
-      en: `The Xiaomi sign-in failed: ${err.message}. Click Connect again.`,
-      fr: `La connexion Xiaomi a échoué : ${err.message}. Cliquez à nouveau sur Connecter.`,
-    });
-  });
-  return loginUrl;
+  if (!linkWaiter) {
+    linkWaiter = waitForAccountLink(page.client)
+      .catch(async (err) => {
+        logger.error('Account link failed', err);
+        await reportStatus(false, {
+          en: `The Xiaomi sign-in failed: ${err.message}. Click Connect again.`,
+          fr: `La connexion Xiaomi a échoué : ${err.message}. Cliquez à nouveau sur Connecter.`,
+        });
+      })
+      .finally(() => {
+        linkWaiter = null;
+        // the page is used up: get the next one ready, if still needed
+        prepareAccountLink();
+      });
+  }
+  return page.loginUrl;
 });
 
 /**
  * Await the approval of a pending account link, then persist the session,
  * publish the robots and report the state. Long-polls until the sign-in page
  * expires.
+ * @param {XiaomiClient} client the client the sign-in page was opened with
  */
-async function waitForAccountLink() {
-  // read the client on every leg: a config update can replace it mid-poll, and
-  // polling a client that is no longer the live one would link nothing
-  while (xiaomi.hasPendingAccountLink()) {
-    const linked = await xiaomi.pollAccountLink();
+async function waitForAccountLink(client) {
+  // a config update can replace the client mid-poll: polling one that is no
+  // longer the live one would link nothing
+  while (client === xiaomi && client.hasPendingAccountLink()) {
+    const linked = await client.pollAccountLink();
     if (linked) {
       logger.info('Xiaomi account linked');
       await persistSession();
@@ -687,6 +775,9 @@ async function waitForAccountLink() {
       await reportStatus(true);
       return;
     }
+  }
+  if (client !== xiaomi) {
+    return;
   }
   logger.warn('The account link expired before it was approved');
   await reportStatus(false, {
@@ -706,7 +797,9 @@ gladys.onConfigUpdated(async (newConfig) => {
   preferLocal = readPreferLocal(newConfig);
   xiaomi.setPreferLocal(preferLocal);
   const updated = readSession(newConfig);
-  if (xiaomi.isLoggedIn() && sameSession(updated, session)) {
+  // Nothing to redo when the session did not change, linked or not: reconnecting
+  // an unlinked account would also drop a sign-in page the user is approving.
+  if (sameSession(updated, session) && (xiaomi.isLoggedIn() || !isSessionUsable(updated))) {
     return;
   }
   logger.info('onConfigUpdated -> reconnecting');
