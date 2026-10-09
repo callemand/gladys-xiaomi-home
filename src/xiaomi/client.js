@@ -251,6 +251,16 @@ export class XiaomiClient {
   }
 
   /**
+   * Fetch the cleaning history summary of one robot. The answer is returned as
+   * is: its shape depends on the firmware (see devices/lastClean.js).
+   * @param {string} duid the device id
+   * @returns {Promise<object|Array>} the get_clean_summary result
+   */
+  async getCleanSummary(duid) {
+    return this.#execute(duid, ROBOROCK_METHOD.GET_CLEAN_SUMMARY, []);
+  }
+
+  /**
    * Forward an RPC command to one robot.
    * @param {string} duid the device id
    * @param {string} method the miIO method

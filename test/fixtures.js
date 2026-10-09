@@ -50,6 +50,11 @@ export const CONSUMABLE = {
   dust_collection_work_times: 9,
 };
 
+// A get_clean_summary result in the bare-list shape of the S5/S6 generation:
+// [clean_time, clean_area, clean_count, record start timestamps, newest first].
+// 1786961500 is 2026-08-17, never "today" when the tests run.
+export const CLEAN_SUMMARY = [174145, 2410150000, 82, [1786961500, 1786875000]];
+
 // A get_room_mapping result: segment id of the active map -> cloud room id.
 export const ROOM_MAPPING = [
   [16, '1000001'],

@@ -12,6 +12,7 @@
 // -----------------------------------------------------------------------------
 
 import { POLL_FREQUENCY } from '../constants.js';
+import { buildCleanedTodayFeature, buildLastCleanStartFeature } from './lastClean.js';
 import { buildDockFeatures, buildVacuumFeatures } from './vacuum.js';
 
 export const VACUUM_SLUG = 'vacuum';
@@ -69,7 +70,11 @@ export function convertDevice(gladys, device) {
     model: device.model || null,
     poll_frequency: POLL_FREQUENCY,
     should_poll: true,
-    features: withFeatureSelectors(buildVacuumFeatures(ids, device.rooms)),
+    features: withFeatureSelectors([
+      ...buildVacuumFeatures(ids, device.rooms),
+      buildLastCleanStartFeature(ids),
+      buildCleanedTodayFeature(ids),
+    ]),
   };
 }
 
