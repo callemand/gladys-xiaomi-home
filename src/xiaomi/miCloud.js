@@ -457,4 +457,32 @@ export class MiCloudClient {
     }
     return response.result;
   }
+
+  /**
+   * The download URL of a map file, named by the robot's get_map_v1 answer.
+   * The robot uploads its map to the Xiaomi cloud; it is never served on the LAN.
+   * @param {string} objName the map file name returned by get_map_v1
+   * @returns {Promise<string>} a short-lived download URL
+   */
+  async getMapFileUrl(objName) {
+    const response = await this.request('/home/getmapfileurl', { obj_name: objName });
+    const url = response.result && response.result.url;
+    if (!url) {
+      throw new Error(`The Xiaomi cloud gave no download URL for the map "${objName}"`);
+    }
+    return url;
+  }
+
+  /**
+   * Download a map file from the URL given by getMapFileUrl.
+   * @param {string} url the download URL
+   * @returns {Promise<Buffer>} the raw (usually gzipped) map file
+   */
+  async downloadMapFile(url) {
+    const response = await fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    if (!response.ok) {
+      throw new Error(`Map download -> HTTP ${response.status}`);
+    }
+    return Buffer.from(await response.arrayBuffer());
+  }
 }

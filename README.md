@@ -94,6 +94,25 @@ power (quiet, balanced, turbo, max).
 
 The scene triggers and actions need Gladys **5.1.0** or later.
 
+### Map widget
+
+A **Vacuum** dashboard widget shows the battery and cleaned surface, the map
+(rooms in colour with their names, walls, no-go areas, virtual walls, cleaning
+path, dock and robot), a status block (state, end of the last cleaning,
+duration, wear of each consumable) and four buttons: Start and Dock, plus two
+the user picks in the widget settings.
+
+The map does **not** come over the LAN: `get_map_v1` answers with the name of a
+file the robot uploaded to the Xiaomi cloud, `/home/getmapfileurl` turns it into
+a short-lived download URL, and the file is a gzipped **RRMap**, the format the
+Roborock app gets too. It is parsed and rendered to a PNG in-process (no native
+dependency), cached 60 s, 8 s while a cleaning is running, and open widgets are
+asked to refresh every 15 s during a cleaning. Only robots **built by Roborock**
+(S5, S6, S7…) upload this format: on other Mi Home vacuums the widget reports an
+error, and every other feature keeps working.
+
+The widget needs Gladys **5.1.0** or later.
+
 ### Fan power ↔ clean mode
 
 Gladys exposes a fixed list of clean modes; the robots expose suction levels.

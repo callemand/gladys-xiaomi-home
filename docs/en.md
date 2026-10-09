@@ -36,6 +36,16 @@ or set the suction power.
 
 Scenes need Gladys 5.1.0 or later.
 
+## Map widget
+
+Add the **Vacuum** widget to a dashboard and pick your robot: it shows the
+battery, the cleaned surface, the map with your rooms, the state and the wear
+of each consumable, with Start and Dock buttons plus two buttons you choose in
+its settings. While the robot cleans, the map refreshes about every 15 seconds.
+
+The map is fetched through the **Xiaomi cloud**, even when the robot answers on
+your local network, and only robots built by Roborock (S5, S6, S7…) provide it.
+
 ## Configuration
 
 1. Click **Connect**: the Xiaomi sign-in page opens.

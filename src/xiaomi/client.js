@@ -6,19 +6,27 @@
 // reconnects silently. The cloud yields each robot's miIO local token + LAN IP,
 // so commands then prefer the LOCAL transport (encrypted UDP) and fall back to
 // a cloud RPC when the robot is not reachable on the LAN. When the user turns
-// off "Prefer the local connection" in Gladys, the order is reversed.
+// off "Prefer the local connection" in Gladys, the order is reversed. The map is
+// the exception: the robot uploads it to the Xiaomi cloud, so it always needs
+// the cloud connection.
 // -----------------------------------------------------------------------------
+
+import { gunzipSync } from 'node:zlib';
 
 import { createLogger } from '@gladysassistant/integration-sdk';
 
 import { ROBOROCK_METHOD, XIAOMI_REGIONS } from '../constants.js';
+import { parseRRMap } from '../map/mapParser.js';
 import { MiCloudClient } from './miCloud.js';
 import { MiioLocalTransport } from './miioLocalTransport.js';
-import { normalizeRoomMappings } from './rooms.js';
+import { attachRoomNames, normalizeRoomMappings } from './rooms.js';
 
 const logger = createLogger({ name: 'xiaomi:client' });
 
 const LOCAL_COOLDOWN_MS = 5 * 60 * 1000;
+
+// get_map_v1 answers "retry" while the robot is still uploading its map.
+const MAP_NAME_ATTEMPTS = 3;
 
 let rpcCounter = 1;
 
@@ -47,10 +55,13 @@ export class XiaomiClient {
    * @param {object} [options]
    * @param {boolean} [options.preferLocal] false to send RPCs through the cloud
    *   first (the Gladys "Prefer the local connection" toggle); defaults to true
+   * @param {number} [options.mapRetryDelayMs] the wait between two get_map_v1
+   *   attempts answered "retry"
    */
-  constructor(session = {}, { preferLocal = true } = {}) {
+  constructor(session = {}, { preferLocal = true, mapRetryDelayMs = 1000 } = {}) {
     this.session = session;
     this.preferLocal = preferLocal;
+    this.mapRetryDelayMs = mapRetryDelayMs;
     this.cloud = null;
     this.devices = [];
     this.tokens = new Map(); // duid -> Buffer token
@@ -258,6 +269,49 @@ export class XiaomiClient {
    */
   async getCleanSummary(duid) {
     return this.#execute(duid, ROBOROCK_METHOD.GET_CLEAN_SUMMARY, []);
+  }
+
+  /**
+   * Fetch and parse the map of one robot: get_map_v1 names the file the robot
+   * uploaded, the Xiaomi cloud gives its download URL, and the (gzipped) file is
+   * the RRMap format the Roborock app gets. Only robots built by Roborock answer
+   * with it.
+   * @param {string} duid the device id
+   * @param {object} [options] options
+   * @param {boolean} [options.includePixels] keep the pixel grid, for rendering
+   * @returns {Promise<object>} the parsed map (see src/map/mapParser.js), each
+   *   segment with its room name when the account knows it
+   */
+  async getMap(duid, { includePixels = false } = {}) {
+    if (!this.cloud) {
+      throw new Error('The map is stored in the Xiaomi cloud, which is not connected');
+    }
+    const mapName = await this.#getMapName(duid);
+    const url = await this.cloud.getMapFileUrl(mapName);
+    const file = await this.cloud.downloadMapFile(url);
+    // gzip magic number: the file is normally compressed, but parse a bare one too
+    const isGzip = file.length > 2 && file[0] === 0x1f && file[1] === 0x8b;
+    const map = parseRRMap(isGzip ? gunzipSync(file) : file, { includePixels });
+    const robot = this.devices.find((device) => device.duid === duid);
+    map.segments = attachRoomNames(map.segments, robot ? robot.rooms : []);
+    map.namedSegmentCount = map.segments.filter((segment) => segment.named).length;
+    return map;
+  }
+
+  async #getMapName(duid) {
+    for (let attempt = 1; attempt <= MAP_NAME_ATTEMPTS; attempt += 1) {
+      const result = await this.#execute(duid, ROBOROCK_METHOD.GET_MAP_V1, []);
+      const name = Array.isArray(result) ? result[0] : result;
+      if (typeof name === 'string' && name && name !== 'retry') {
+        return name;
+      }
+      if (attempt < MAP_NAME_ATTEMPTS) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, this.mapRetryDelayMs);
+        });
+      }
+    }
+    throw new Error(`Robot ${duid} did not name its map (get_map_v1)`);
   }
 
   /**
