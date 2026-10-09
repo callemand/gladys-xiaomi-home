@@ -39,18 +39,20 @@ working region is remembered so a restart does not probe them again.
 
 Each **robot** exposes these features:
 
-| Feature         | Category / type                  | Mapping                                                  |
-| --------------- | -------------------------------- | -------------------------------------------------------- |
-| State           | `vacuum-cleaner` / `state`       | miIO `state` → Gladys state (read-only)                  |
-| Run mode        | `vacuum-cleaner` / `run-mode`    | Idle / Clean → `app_stop` / `app_start`                  |
-| Clean mode      | `vacuum-cleaner` / `clean-mode`  | miIO `fan_power` ↔ Gladys clean mode (table below)       |
-| Dock            | `vacuum-cleaner` / `dock`        | "Go home" (value 1) → `app_charge`                       |
-| Battery         | `battery` / `integer`            | miIO `battery` (%), read-only, history kept              |
-| Main brush      | `maintenance` / `life-remaining` | miIO `get_consumable`, % left, read-only, history kept   |
-| Side brush      | `maintenance` / `life-remaining` | miIO `get_consumable`, % left, read-only, history kept   |
-| Filter          | `maintenance` / `life-remaining` | miIO `get_consumable`, % left, read-only, history kept   |
-| Sensor cleaning | `maintenance` / `life-remaining` | miIO `get_consumable`, % left, read-only, history kept   |
-| Room to clean   | `text` / `select`                | `get_room_mapping` → `app_segment_clean` on that segment |
+| Feature          | Category / type                  | Mapping                                                  |
+| ---------------- | -------------------------------- | -------------------------------------------------------- |
+| State            | `vacuum-cleaner` / `state`       | miIO `state` → Gladys state (read-only)                  |
+| Run mode         | `vacuum-cleaner` / `run-mode`    | Idle / Clean → `app_stop` / `app_start`                  |
+| Clean mode       | `vacuum-cleaner` / `clean-mode`  | miIO `fan_power` ↔ Gladys clean mode (table below)       |
+| Dock             | `vacuum-cleaner` / `dock`        | "Go home" (value 1) → `app_charge`                       |
+| Battery          | `battery` / `integer`            | miIO `battery` (%), read-only, history kept              |
+| Main brush       | `maintenance` / `life-remaining` | miIO `get_consumable`, % left, read-only, history kept   |
+| Side brush       | `maintenance` / `life-remaining` | miIO `get_consumable`, % left, read-only, history kept   |
+| Filter           | `maintenance` / `life-remaining` | miIO `get_consumable`, % left, read-only, history kept   |
+| Sensor cleaning  | `maintenance` / `life-remaining` | miIO `get_consumable`, % left, read-only, history kept   |
+| Room to clean    | `text` / `select`                | `get_room_mapping` → `app_segment_clean` on that segment |
+| Last clean start | `unknown` / `unknown`            | `get_clean_summary` newest record, Unix seconds          |
+| Cleaned today    | `unknown` / `unknown`            | 1 when the last clean started today, else 0              |
 
 The **room selector** is only exposed when the robot returns a map: its segments
 come from the robot, their names from the rooms of the Mi Home account. A segment
@@ -62,6 +64,35 @@ A robot that reports a **station** (`dock_type`) also publishes it as its own
 Gladys device, with three maintenance features: strainer, cleaning brush and dust
 collection. The robot reports how long each part has been _used_, so the
 percentages are computed against the manufacturer service intervals.
+
+**Last clean start** and **Cleaned today** come from `get_clean_summary`, which
+may go through the cloud: it is only called when a cleaning starts, when
+`last_clean_t` changes, or every 5 minutes on models that do not report it. Both
+the object answer of recent firmwares and the bare list of the S5/S6 generation
+(`[time, area, count, records]`) are read. **Cleaned today** is always published,
+0 included, so it works as a scene condition in both directions.
+
+### Scenes
+
+The robot also takes part in scenes. **Triggers** fire on the transitions seen
+between two polls (the first poll after a start only records the state):
+
+| Trigger             | When                                                | Variables                             |
+| ------------------- | --------------------------------------------------- | ------------------------------------- |
+| `cleaning_started`  | a new cleaning begins (not a resume after a pause)  | robot name                            |
+| `cleaning_finished` | the cleaning is over and the robot is back for good | robot name, duration (min), area (m²) |
+| `returned_to_dock`  | the robot reaches its dock                          | robot name                            |
+| `battery_low`       | the battery drops to 20 % or below                  | robot name, level                     |
+| `charging_complete` | the battery reaches 100 %                           | robot name                            |
+| `robot_error`       | the robot enters an error state                     | robot name, error code, error label   |
+| `consumable_worn`   | a consumable drops to 10 % or below                 | robot name, consumable, percent left  |
+| `state_changed`     | any change of state                                 | robot name, state label, state code   |
+
+**Actions**: start, pause, stop, return to dock, clean rooms (names separated by
+commas, matched against the room selector, or raw segment ids), set the suction
+power (quiet, balanced, turbo, max).
+
+The scene triggers and actions need Gladys **5.1.0** or later.
 
 ### Fan power ↔ clean mode
 

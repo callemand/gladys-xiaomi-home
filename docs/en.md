@@ -20,6 +20,21 @@ For every robot of your account:
 - **Clean mode** — the suction level (silent, balanced, turbo, max, gentle).
 - **Dock** — send the robot back to its charging dock.
 - **Battery** — the current battery level, in percent.
+- **Last clean start** and **Cleaned today** — when the last cleaning started,
+  and whether it was today (1) or not (0). Use **Cleaned today** as a scene
+  condition, for example to start a cleaning only if the robot has not run yet.
+
+## Scenes
+
+The robot can **start a scene** when it starts or finishes a cleaning, returns to
+its dock, runs low on battery (20 %), finishes charging, reports an error, when a
+consumable is worn (10 % left), or on any change of state.
+
+A scene can also **command the robot**: start, pause, stop, return to the dock,
+clean some rooms (their names separated by commas, e.g. "Kitchen, Living room"),
+or set the suction power.
+
+Scenes need Gladys 5.1.0 or later.
 
 ## Configuration
 

@@ -15,6 +15,7 @@ import { WebSocketServer } from 'ws';
 import { rc4, signedNonce } from '../src/xiaomi/miCrypto.js';
 import { buildPacket, parsePacket } from '../src/xiaomi/miioPacket.js';
 import {
+  CLEAN_SUMMARY,
   CONSUMABLE,
   DID,
   MI_DEVICE,
@@ -45,6 +46,8 @@ async function waitUntil(predicate, what, timeoutMs = 15000) {
 // --- Fake miIO device (UDP) --------------------------------------------------
 function startFakeDevice() {
   const received = [];
+  // mutable, so a test can move the robot to another state between two polls
+  const robot = { status: { ...STATUS } };
   const socket = dgram.createSocket('udp4');
   socket.on('message', (msg, rinfo) => {
     if (msg.readUInt16BE(2) === 0x20) {
@@ -59,8 +62,9 @@ function startFakeDevice() {
     const req = JSON.parse(parsed.payload.toString());
     received.push(req);
     const results = {
-      get_status: [STATUS],
+      get_status: [robot.status],
       get_consumable: [CONSUMABLE],
+      get_clean_summary: CLEAN_SUMMARY,
       get_room_mapping: ROOM_MAPPING,
     };
     const result = results[req.method] || ['ok'];
@@ -72,7 +76,9 @@ function startFakeDevice() {
     );
   });
   return new Promise((resolve) => {
-    socket.bind(0, '127.0.0.1', () => resolve({ socket, received, port: socket.address().port }));
+    socket.bind(0, '127.0.0.1', () =>
+      resolve({ socket, received, robot, port: socket.address().port }),
+    );
   });
 }
 
@@ -167,6 +173,7 @@ function startFakeGladys() {
     statePosts: [],
     transportPosts: [],
     connectionStatusPosts: [],
+    sceneEventPosts: [],
     commandResults: [],
     ws: null,
   };
@@ -202,6 +209,9 @@ function startFakeGladys() {
         respond({ success: true });
       } else if (req.method === 'POST' && req.url === '/api/integration/v1/device/transport') {
         state.transportPosts.push(JSON.parse(body).transports);
+        respond({ success: true });
+      } else if (req.method === 'POST' && req.url === '/api/integration/v1/scene/event') {
+        state.sceneEventPosts.push(JSON.parse(body));
         respond({ success: true });
       } else {
         res.writeHead(404);
@@ -286,12 +296,14 @@ test('the integration discovers, polls and controls a Xiaomi/Roborock robot', as
         'filter',
         'sensor-cleaning',
         'room',
+        'last-clean-start',
+        'cleaned-today',
       ],
     );
 
     // The segments come from the robot, their names from the account: the
     // selector is only useful when the two are joined.
-    const room = robot.features.at(-1);
+    const room = robot.features.find((f) => f.external_id.endsWith(':room'));
     assert.deepEqual(
       room.supported_options.map(({ value, label }) => ({ value, label })),
       [
@@ -391,6 +403,13 @@ test('the integration discovers, polls and controls a Xiaomi/Roborock robot', as
       { device_feature_external_id: `ext:${SELECTOR}:vacuum:${DID}:side-brush`, state: 75 },
       { device_feature_external_id: `ext:${SELECTOR}:vacuum:${DID}:filter`, state: 90 },
       { device_feature_external_id: `ext:${SELECTOR}:vacuum:${DID}:sensor-cleaning`, state: 50 },
+      // CLEAN_SUMMARY, in the bare-list shape of the S6: the newest record start.
+      {
+        device_feature_external_id: `ext:${SELECTOR}:vacuum:${DID}:last-clean-start`,
+        state: 1786961500,
+      },
+      // That start is not today.
+      { device_feature_external_id: `ext:${SELECTOR}:vacuum:${DID}:cleaned-today`, state: 0 },
       // The robot is charging, not cleaning a segment: the selector is cleared.
       { device_feature_external_id: `ext:${SELECTOR}:vacuum:${DID}:room`, text: 'none' },
     ]);
@@ -515,5 +534,96 @@ test('the integration discovers, polls and controls a Xiaomi/Roborock robot', as
       true,
     );
     assert.deepEqual(device.received.slice(before), [], 'nothing was sent to the robot');
+  });
+
+  // --- Scenes -----------------------------------------------------------------
+  const runSceneAction = async (messageId, key, fields) => {
+    send('external-integration.scene-action.run', { message_id: messageId, key, fields });
+    await waitUntil(
+      () => gladys.state.commandResults.some((r) => r.message_id === messageId),
+      `${key} ack\n${output}`,
+    );
+    return gladys.state.commandResults.find((r) => r.message_id === messageId);
+  };
+
+  await t.test('the start_cleaning scene action forwards app_start', async () => {
+    const ack = await runSceneAction('scene-start', 'start_cleaning', {
+      vacuum: pollDevice.external_id,
+    });
+    assert.equal(ack.success, true, ack.error);
+    assert.ok(
+      device.received.some((r) => r.method === 'app_start'),
+      'app_start was sent',
+    );
+  });
+
+  await t.test('the clean_rooms scene action resolves the room names', async () => {
+    const ack = await runSceneAction('scene-rooms', 'clean_rooms', {
+      vacuum: pollDevice.external_id,
+      rooms: 'salon, Garage',
+    });
+    assert.equal(ack.success, true, ack.error);
+    const cmd = device.received.findLast((r) => r.method === 'app_segment_clean');
+    assert.deepEqual(cmd.params, [{ segments: [17] }]);
+  });
+
+  await t.test('the set_fan_power scene action sends the fan-power code', async () => {
+    const ack = await runSceneAction('scene-fan', 'set_fan_power', {
+      vacuum: pollDevice.external_id,
+      mode: 'turbo',
+    });
+    assert.equal(ack.success, true, ack.error);
+    const cmd = device.received.findLast((r) => r.method === 'set_custom_mode');
+    assert.deepEqual(cmd.params, [103]);
+  });
+
+  await t.test('a scene action with no known room fails, and sends nothing', async () => {
+    const before = device.received.length;
+    const ack = await runSceneAction('scene-rooms-none', 'clean_rooms', {
+      vacuum: pollDevice.external_id,
+      rooms: 'Garage',
+    });
+    assert.equal(ack.success, false);
+    assert.match(ack.error, /No known room matched/);
+    assert.deepEqual(device.received.slice(before), []);
+  });
+
+  await t.test('a poll that sees the robot start cleaning fires the scene triggers', async () => {
+    // The first poll above (charging) seeded the snapshot.
+    device.robot.status = { ...STATUS, state: 5, in_cleaning: 1 };
+    send('external-integration.device.poll', { message_id: 'poll-clean', device: pollDevice });
+    await waitUntil(
+      () => gladys.state.sceneEventPosts.some((e) => e.key === 'cleaning_started'),
+      `cleaning_started event\n${output}`,
+    );
+    const vacuum = pollDevice.external_id;
+    assert.deepEqual(
+      gladys.state.sceneEventPosts.map((e) => e.key),
+      ['cleaning_started', 'state_changed'],
+    );
+    assert.deepEqual(gladys.state.sceneEventPosts[0].data, { vacuum, device_name: DID });
+    assert.deepEqual(gladys.state.sceneEventPosts[1].data, {
+      vacuum,
+      device_name: DID,
+      state: 'Nettoyage',
+      state_code: 5,
+    });
+  });
+
+  await t.test('back at the dock: cleaning_finished and returned_to_dock', async () => {
+    device.robot.status = { ...STATUS, clean_time: 1800, clean_area: 25000000 };
+    const before = gladys.state.sceneEventPosts.length;
+    send('external-integration.device.poll', { message_id: 'poll-docked', device: pollDevice });
+    await waitUntil(
+      () => gladys.state.sceneEventPosts.some((e) => e.key === 'returned_to_dock'),
+      `returned_to_dock event\n${output}`,
+    );
+    const events = gladys.state.sceneEventPosts.slice(before);
+    assert.deepEqual(
+      events.map((e) => e.key),
+      ['cleaning_finished', 'returned_to_dock', 'state_changed'],
+    );
+    assert.equal(events[0].data.duration_min, 30);
+    assert.equal(events[0].data.area_m2, 25);
   });
 });

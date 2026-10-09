@@ -9,6 +9,12 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 import { SESSION_KEYS } from '../src/session.js';
+import { SCENE_ACTIONS } from '../src/devices/sceneActions.js';
+import {
+  SCENE_TRIGGERS,
+  computeSceneEvents,
+  snapshotFromStatus,
+} from '../src/devices/sceneTriggers.js';
 
 const root = new URL('..', import.meta.url);
 const manifest = JSON.parse(
@@ -83,4 +89,57 @@ test('the cover image exists in the repository, at the size the store expects', 
   assert.ok(sof > 0, 'no JPEG SOF0 marker found in the cover');
   assert.equal(cover.readUInt16BE(sof + 7), 800, 'cover width must be 800');
   assert.equal(cover.readUInt16BE(sof + 5), 534, 'cover height must be 534');
+});
+
+test('the scene triggers declared are exactly the ones the code fires', () => {
+  const declared = manifest.scene_triggers.map((trigger) => trigger.key).sort();
+  assert.deepEqual(declared, Object.values(SCENE_TRIGGERS).sort());
+});
+
+test('every variable a scene event carries is declared on its trigger', () => {
+  // Fire every trigger at once, then check each payload against the manifest:
+  // an undeclared variable is invisible to the scene author.
+  const variablesByKey = new Map(
+    manifest.scene_triggers.map((trigger) => [
+      trigger.key,
+      new Set(['vacuum', ...trigger.variables.map((variable) => variable.key)]),
+    ]),
+  );
+  // One cleaning, start to finish, crossing every threshold on the way.
+  const worn = { filter: 5, mainBrush: 50, sideBrush: 50, sensor: 50 };
+  const fresh = { filter: 50, mainBrush: 50, sideBrush: 50, sensor: 50 };
+  const steps = [
+    snapshotFromStatus({ state: 3, battery: 99 }, fresh),
+    snapshotFromStatus({ state: 5, battery: 99 }, fresh),
+    snapshotFromStatus({ state: 12, battery: 10, error_code: 2 }, worn),
+    snapshotFromStatus({ state: 8, battery: 100 }, worn),
+  ];
+  const ctx = { vacuum: 'v', deviceName: 'n' };
+  computeSceneEvents(null, steps[0], ctx);
+  const events = steps
+    .slice(1)
+    .flatMap((snapshot, index) => computeSceneEvents(steps[index], snapshot, ctx));
+  assert.deepEqual(
+    [...new Set(events.map((event) => event.key))].sort(),
+    Object.values(SCENE_TRIGGERS).sort(),
+    'the sequence must fire every trigger',
+  );
+  events.forEach((event) => {
+    const declared = variablesByKey.get(event.key);
+    assert.ok(declared, `"${event.key}" is not declared`);
+    Object.keys(event.data).forEach((key) =>
+      assert.ok(declared.has(key), `"${event.key}" carries "${key}", which is not declared`),
+    );
+  });
+});
+
+test('the scene actions declared are exactly the ones handled', () => {
+  const declared = manifest.scene_actions.map((action) => action.key).sort();
+  assert.deepEqual(declared, Object.values(SCENE_ACTIONS).sort());
+  Object.entries(SCENE_ACTIONS).forEach(([name, key]) => {
+    assert.ok(
+      indexSource.includes(`gladys.onSceneAction(SCENE_ACTIONS.${name},`),
+      `scene action "${key}" has no handler`,
+    );
+  });
 });

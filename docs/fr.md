@@ -22,6 +22,23 @@ Pour chaque robot de votre compte :
   turbo, max, doux).
 - **Base** — renvoyer le robot vers sa base de charge.
 - **Batterie** — le niveau de batterie actuel, en pourcentage.
+- **Début du dernier nettoyage** et **Nettoyé aujourd'hui** — l'heure de début
+  du dernier nettoyage, et s'il a eu lieu aujourd'hui (1) ou non (0). Utilisez
+  **Nettoyé aujourd'hui** comme condition de scène, par exemple pour ne lancer un
+  nettoyage que si le robot n'a pas encore tourné.
+
+## Scènes
+
+Le robot peut **déclencher une scène** quand il démarre ou termine un nettoyage,
+revient à sa base, a une batterie faible (20 %), finit de charger, signale une
+erreur, quand un consommable est usé (10 % restants), ou à chaque changement
+d'état.
+
+Une scène peut aussi **piloter le robot** : démarrer, mettre en pause, arrêter,
+renvoyer à la base, nettoyer des pièces (leurs noms séparés par des virgules,
+ex. « Cuisine, Salon ») ou régler la puissance d'aspiration.
+
+Les scènes nécessitent Gladys 5.1.0 ou plus récent.
 
 ## Configuration
 

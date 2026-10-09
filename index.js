@@ -8,7 +8,9 @@
 //     persists the session, then reconnects silently on every start;
 //   - publishes the account robots as discovered devices (each robot exposes
 //     state / run-mode / clean-mode / dock / battery features);
-//   - answers the polls of Gladys with the current robot status;
+//   - answers the polls of Gladys with the current robot status, and fires the
+//     scene triggers on the transitions it sees between two polls;
+//   - runs the scene actions (start, pause, stop, dock, rooms, fan power);
 //   - forwards user commands to the robot over the LAN (encrypted miIO on UDP
 //     54321), falling back to a Xiaomi cloud RPC when it is unreachable.
 //
@@ -33,9 +35,19 @@ import {
   buildDockStates,
   buildPollStates,
   buildSetCommand,
+  consumablePercents,
 } from './src/devices/vacuum.js';
 import {
+  buildCleanedTodayState,
+  buildLastCleanStartState,
+  extractLastCleanStart,
+} from './src/devices/lastClean.js';
+import { computeSceneEvents, snapshotFromStatus } from './src/devices/sceneTriggers.js';
+import { FAN_POWER_MODES, SCENE_ACTIONS, resolveRoomSegments } from './src/devices/sceneActions.js';
+import {
   FEATURE_CODES,
+  ROBOROCK_CLEANING_STATES,
+  ROBOROCK_METHOD,
   ROBOROCK_SEGMENT_CLEANING_STATES,
   ROOM_SELECTION_NONE,
 } from './src/constants.js';
@@ -71,6 +83,52 @@ const roomCleanings = new Map();
 // Lets a stale selection be cleared after a restart of the integration, without
 // wiping a fresh selection before the robot has had time to start on it.
 const initializedRoomSelectors = new Set();
+
+// Last known snapshot per robot, to detect the transitions that fire the scene
+// triggers. The first observation only seeds the cache: nothing is fired when
+// the integration starts.
+const sceneSnapshots = new Map();
+
+/**
+ * Detect the robot transitions since the last poll and fire the matching scene
+ * triggers. Never throws: a trigger failure must not break the poll.
+ * @param {object} device the Gladys device being polled
+ * @param {string} duid the robot device id
+ * @param {object} status the get_status result
+ * @param {object} consumable the get_consumable result
+ * @returns {Promise<void>}
+ */
+async function publishSceneTriggers(device, duid, status, consumable) {
+  try {
+    const snapshot = snapshotFromStatus(status, consumablePercents(consumable));
+    const previous = sceneSnapshots.get(duid) || null;
+    sceneSnapshots.set(duid, snapshot);
+
+    const events = computeSceneEvents(previous, snapshot, {
+      vacuum: device.external_id,
+      deviceName: device.name || duid,
+    });
+    for (const event of events) {
+      await gladys.publishSceneEvent(event.key, event.data);
+    }
+  } catch (err) {
+    logger.warn(`Could not publish scene triggers for ${duid}: ${err.message}`);
+  }
+}
+
+/**
+ * Cleaning-history cache.
+ *
+ * get_clean_summary is not guaranteed to be answered on the LAN and can
+ * therefore go through the Xiaomi cloud: it must not run on every Gladys poll.
+ *
+ * status.last_clean_t, when the firmware reports it, is the END of the latest
+ * cleaning. It is only used as a change marker: the feature exposed to Gladys is
+ * the cleaning START, from get_clean_summary.
+ */
+const cleanHistoryCache = new Map();
+
+const CLEAN_HISTORY_REFRESH_MS = 5 * 60 * 1000;
 
 /**
  * Build the room-selector feedback produced by a status change.
@@ -111,6 +169,81 @@ function buildRoomSelectionFeedback(duid, ids, status, hasRoomSelector) {
     device_feature_external_id: ids.feature(FEATURE_CODES.ROOM),
     text: ROOM_SELECTION_NONE,
   };
+}
+
+/**
+ * Get the latest cleaning start timestamp while limiting history RPC traffic.
+ *
+ * Verified on Roborock QV 35A (roborock.vacuum.a168), through the Roborock app:
+ *
+ *   get_clean_summary.records[0] = get_clean_record(...)[0].begin
+ *   get_status.last_clean_t       = get_clean_record(...)[0].end
+ *
+ * last_clean_t is therefore only used as a cheap change detector. On models
+ * that do not report it, the summary is refreshed periodically instead.
+ *
+ * @param {string} duid the robot device id
+ * @param {object} status get_status result
+ * @returns {Promise<number|null>} Unix timestamp in seconds
+ */
+async function getLastCleanStartForPoll(duid, status) {
+  const rawLastCleanEnd = Number(status?.last_clean_t);
+  const lastCleanEnd =
+    Number.isSafeInteger(rawLastCleanEnd) && rawLastCleanEnd > 0 ? rawLastCleanEnd : null;
+
+  const now = Date.now();
+  const cached = cleanHistoryCache.get(duid);
+
+  const robotState = Number(status?.state);
+  const isCleaning = ROBOROCK_CLEANING_STATES.has(robotState);
+  const cleaningStarted = isCleaning && cached?.wasCleaning === false;
+
+  const markerChanged =
+    lastCleanEnd !== null &&
+    cached?.lastCleanEnd !== undefined &&
+    lastCleanEnd !== cached.lastCleanEnd;
+
+  const periodicRefreshDue = !cached || now >= (cached.nextRefreshAt || 0);
+
+  // Refresh immediately when a cleaning starts, and again when last_clean_t
+  // changes (normally when that cleaning ends). This makes Last clean start
+  // useful while a cleaning is still in progress instead of only afterwards.
+  if (!cleaningStarted && !markerChanged && !periodicRefreshDue) {
+    if (cached) {
+      cached.wasCleaning = isCleaning;
+    }
+    return cached?.lastCleanStart ?? null;
+  }
+
+  try {
+    const summary = await xiaomi.getCleanSummary(duid);
+    const lastCleanStart = extractLastCleanStart(summary);
+
+    cleanHistoryCache.set(duid, {
+      lastCleanEnd,
+      lastCleanStart,
+      wasCleaning: isCleaning,
+      nextRefreshAt:
+        lastCleanEnd === null ? now + CLEAN_HISTORY_REFRESH_MS : Number.POSITIVE_INFINITY,
+    });
+
+    return lastCleanStart;
+  } catch (err) {
+    logger.warn(`Could not get the cleaning history of ${duid}: ${err.message}`);
+
+    // Store the CURRENT lastCleanEnd (not the stale cached one) so a model that
+    // does not support get_clean_summary — or an unreachable cloud — does not
+    // keep `markerChanged` true and retry the call on every poll. The periodic
+    // refresh (nextRefreshAt) still applies.
+    cleanHistoryCache.set(duid, {
+      lastCleanEnd,
+      lastCleanStart: cached?.lastCleanStart ?? null,
+      wasCleaning: isCleaning,
+      nextRefreshAt: now + CLEAN_HISTORY_REFRESH_MS,
+    });
+
+    return cached?.lastCleanStart ?? null;
+  }
 }
 
 /**
@@ -269,6 +402,56 @@ gladys.onSetValue(async (device, feature, value) => {
   }
 });
 
+// --- Scene actions: a scene commands the robot -------------------------------
+// Each action carries a `vacuum` field (source: "devices"): its value is the
+// device external_id, from which the duid is parsed.
+function sceneActionDuid(fields) {
+  const vacuum = fields && fields.vacuum;
+  if (typeof vacuum !== 'string' || !vacuum) {
+    throw new Error('The "vacuum" field is required');
+  }
+  return parseExternalId(vacuum).duid;
+}
+
+gladys.onSceneAction(SCENE_ACTIONS.START_CLEANING, async (fields) => {
+  await xiaomi.sendCommand(sceneActionDuid(fields), ROBOROCK_METHOD.APP_START, []);
+});
+
+gladys.onSceneAction(SCENE_ACTIONS.PAUSE_CLEANING, async (fields) => {
+  await xiaomi.sendCommand(sceneActionDuid(fields), ROBOROCK_METHOD.APP_PAUSE, []);
+});
+
+gladys.onSceneAction(SCENE_ACTIONS.STOP_CLEANING, async (fields) => {
+  await xiaomi.sendCommand(sceneActionDuid(fields), ROBOROCK_METHOD.APP_STOP, []);
+});
+
+gladys.onSceneAction(SCENE_ACTIONS.RETURN_TO_DOCK, async (fields) => {
+  await xiaomi.sendCommand(sceneActionDuid(fields), ROBOROCK_METHOD.APP_CHARGE, []);
+});
+
+gladys.onSceneAction(SCENE_ACTIONS.SET_FAN_POWER, async (fields) => {
+  const duid = sceneActionDuid(fields);
+  const cleanMode = FAN_POWER_MODES[String(fields.mode)];
+  if (cleanMode === undefined) {
+    throw new Error(`Unknown fan power mode: "${fields.mode}"`);
+  }
+  const command = buildSetCommand(FEATURE_CODES.CLEAN_MODE, cleanMode);
+  if (!command) {
+    throw new Error(`Fan power mode "${fields.mode}" is not controllable`);
+  }
+  await xiaomi.sendCommand(duid, command.method, command.params);
+});
+
+gladys.onSceneAction(SCENE_ACTIONS.CLEAN_ROOMS, async (fields) => {
+  const duid = sceneActionDuid(fields);
+  const robot = xiaomi.listDevices().find((candidate) => candidate.duid === duid);
+  const segments = resolveRoomSegments(fields.rooms, robot?.rooms || []);
+  if (segments.length === 0) {
+    throw new Error(`No known room matched "${fields.rooms}"`);
+  }
+  await xiaomi.sendCommand(duid, ROBOROCK_METHOD.APP_SEGMENT_CLEAN, [{ segments }]);
+});
+
 // --- Polling: Gladys asks to refresh a device --------------------------------
 gladys.onPoll(async (device) => {
   const { slug, duid } = parseExternalId(device.external_id);
@@ -289,6 +472,16 @@ gladys.onPoll(async (device) => {
     ]);
     const ids = vacuumExternalIds(gladys, duid);
     states = [...buildPollStates(ids, status), ...buildConsumableStates(ids, consumable)];
+
+    const lastCleanStart = await getLastCleanStartForPoll(duid, status);
+    const lastCleanState = buildLastCleanStartState(ids, lastCleanStart);
+    if (lastCleanState) {
+      states.push(lastCleanState);
+    }
+    // "Cleaned today" (0/1): a scene condition can check whether the vacuum ran
+    // today. Always published (even 0) so both branches of the condition work.
+    states.push(buildCleanedTodayState(ids, lastCleanStart));
+
     const robot = xiaomi.listDevices().find((candidate) => candidate.duid === duid);
     const roomFeedback = buildRoomSelectionFeedback(
       duid,
@@ -299,6 +492,8 @@ gladys.onPoll(async (device) => {
     if (roomFeedback) {
       states.push(roomFeedback);
     }
+
+    await publishSceneTriggers(device, duid, status, consumable);
   }
 
   if (states.length > 0) {
