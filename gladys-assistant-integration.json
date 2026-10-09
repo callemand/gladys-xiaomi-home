@@ -1,13 +1,8 @@
 {
   "manifest_version": 1,
   "type": "device",
-  "categories": [
-    "appliances"
-  ],
-  "transports": [
-    "local",
-    "cloud"
-  ],
+  "categories": ["appliances"],
+  "transports": ["local", "cloud"],
   "name": "Xiaomi Home",
   "description": {
     "en": "Robot vacuums paired in the Xiaomi Home app: state, start/stop, fan power, dock, battery.",
@@ -15,7 +10,7 @@
   },
   "version": "1.3.1",
   "docker_image": "ghcr.io/callemand/gladys-xiaomi-home:1.3.1",
-  "gladys_version": ">=5.1.0",
+  "gladys_version": ">=5.1.5",
   "cover_image": "https://raw.githubusercontent.com/callemand/gladys-xiaomi-home/main/cover.jpg",
   "config_schema": [
     {
@@ -28,7 +23,13 @@
       "description": {
         "en": "Click Connect and approve the sign-in on the Xiaomi page that opens. Your robot vacuums are then detected automatically — there is nothing else to fill in.",
         "fr": "Cliquez sur Connecter et validez la connexion sur la page Xiaomi qui s'ouvre. Vos aspirateurs robots sont ensuite détectés automatiquement — il n'y a rien d'autre à renseigner."
-      }
+      },
+      "credential_keys": [
+        "session_user_id",
+        "session_pass_token",
+        "session_ssecurity",
+        "session_region"
+      ]
     }
   ],
   "widgets": [
