@@ -8,8 +8,8 @@
     "en": "Robot vacuums paired in the Xiaomi Home app: state, start/stop, fan power, dock, battery.",
     "fr": "Aspirateurs robots de l'application Xiaomi Home : état, marche/arrêt, aspiration, base, batterie."
   },
-  "version": "1.3.1",
-  "docker_image": "ghcr.io/callemand/gladys-xiaomi-home:1.3.1",
+  "version": "1.4.0",
+  "docker_image": "ghcr.io/callemand/gladys-xiaomi-home:1.4.0",
   "gladys_version": ">=5.1.0",
   "cover_image": "https://raw.githubusercontent.com/callemand/gladys-xiaomi-home/main/cover.jpg",
   "config_schema": [
