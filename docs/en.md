@@ -57,6 +57,10 @@ your local network, and only robots built by Roborock (S5, S6, S7…) provide it
 > You **never** type your Xiaomi password into Gladys, and this is only needed
 > **once**: the session is stored and reused automatically after a restart.
 
+To use another Xiaomi account, or after revoking the access, click
+**Disconnect**: Gladys forgets the session and restarts the integration, then
+**Connect** links an account again.
+
 There is **nothing to configure**: the Xiaomi server region, your robots, their
 local encryption keys and their IP addresses are all discovered automatically.
 

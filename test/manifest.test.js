@@ -55,6 +55,16 @@ test('the session keys stay OUT of the config_schema', () => {
   });
 });
 
+test('the account field declares the session keys it owns as its credentials', () => {
+  // Gladys deletes exactly these keys when the user clicks Disconnect. The
+  // device id is NOT one of them: it must stay stable across links, it carries
+  // the device trust that keeps Xiaomi from re-triggering a verification.
+  const [field] = manifest.config_schema;
+  const { DEVICE_ID, ...accountKeys } = SESSION_KEYS;
+  assert.deepEqual([...field.credential_keys].sort(), Object.values(accountKeys).sort());
+  assert.equal(field.credential_keys.includes(DEVICE_ID), false);
+});
+
 test('no action is declared, and none is handled', () => {
   // The account link needs no button beyond Connect, and nothing else is
   // manual: a declared action with no handler would fail silently for the user.
