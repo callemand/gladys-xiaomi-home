@@ -53,6 +53,8 @@ export class MiioLocalTransport {
     this.handshakeAt = 0;
     this.pending = new Map(); // id -> { resolve, reject, timer }
     this.handshakeWaiter = null;
+    // The handshake in progress, shared by the requests sent meanwhile.
+    this.handshakeInFlight = null;
   }
 
   #ensureSocket() {
@@ -107,12 +109,29 @@ export class MiioLocalTransport {
 
   /**
    * Sync the device clock (handshake), unless a recent one is still valid.
+   *
+   * Concurrent requests share one handshake: a poll sends get_status and
+   * get_consumable together, and with a waiter each, the second would replace
+   * the first, which would then time out although the robot answered.
    * @returns {Promise<void>} resolves once handshaked
    */
   async #handshake() {
     if (this.deviceId && Date.now() - this.handshakeAt < HANDSHAKE_TTL_MS) {
       return;
     }
+    if (!this.handshakeInFlight) {
+      this.handshakeInFlight = this.#sendHello().finally(() => {
+        this.handshakeInFlight = null;
+      });
+    }
+    await this.handshakeInFlight;
+  }
+
+  /**
+   * Send the hello packet and await the reply.
+   * @returns {Promise<void>} resolves once the robot answered
+   */
+  async #sendHello() {
     this.#ensureSocket();
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {

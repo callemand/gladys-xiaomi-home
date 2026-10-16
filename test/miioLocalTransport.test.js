@@ -15,10 +15,12 @@ const DEVICE_ID = Buffer.from('0a0b0c0d', 'hex');
 
 function startFakeDevice() {
   const received = [];
+  const hellos = [];
   const socket = dgram.createSocket('udp4');
   socket.on('message', (msg, rinfo) => {
     const isHello = msg.readUInt16BE(2) === 0x20;
     if (isHello) {
+      hellos.push(msg);
       const reply = buildPacket({ deviceId: DEVICE_ID, ts: 1700000000, token });
       socket.send(reply, rinfo.port, rinfo.address);
       return;
@@ -31,7 +33,9 @@ function startFakeDevice() {
     socket.send(reply, rinfo.port, rinfo.address);
   });
   return new Promise((resolve) => {
-    socket.bind(0, '127.0.0.1', () => resolve({ socket, received, port: socket.address().port }));
+    socket.bind(0, '127.0.0.1', () =>
+      resolve({ socket, received, hellos, port: socket.address().port }),
+    );
   });
 }
 
@@ -54,4 +58,26 @@ test('the miIO local transport rejects when the device is unreachable', async (t
   const transport = new MiioLocalTransport('127.0.0.1', token, 1);
   t.after(() => transport.disconnect());
   await assert.rejects(() => transport.request('get_status', []));
+});
+
+test('concurrent requests share one handshake', async (t) => {
+  // A poll sends get_status and get_consumable at once: with a waiter per
+  // handshake, the first request timed out although the robot answered.
+  const device = await startFakeDevice();
+  const transport = new MiioLocalTransport('127.0.0.1', token, device.port);
+  t.after(() => {
+    transport.disconnect();
+    device.socket.close();
+  });
+
+  const results = await Promise.all([
+    transport.request('get_status', []),
+    transport.request('get_consumable', []),
+  ]);
+  assert.deepEqual(results, [[STATUS], [STATUS]]);
+  assert.equal(device.hellos.length, 1);
+  assert.deepEqual(
+    device.received.map((req) => req.method),
+    ['get_status', 'get_consumable'],
+  );
 });
