@@ -474,6 +474,25 @@ export class MiCloudClient {
   }
 
   /**
+   * The download URL of a file a MIoT robot uploaded (its map, for the Xiaomi-made
+   * ones), named `<user id>/<did>/<file>`.
+   * @param {string} objName the object name
+   * @returns {Promise<string>} a short-lived download URL
+   */
+  async getInterimFileUrl(objName) {
+    const response = await this.request('/v2/home/get_interim_file_url_pro', {
+      obj_name: objName,
+    });
+    const url = response.result && response.result.url;
+    if (!url) {
+      throw new Error(
+        `The Xiaomi cloud gave no download URL for "${objName}" (code ${response.code})`,
+      );
+    }
+    return url;
+  }
+
+  /**
    * Download a map file from the URL given by getMapFileUrl.
    * @param {string} url the download URL
    * @returns {Promise<Buffer>} the raw (usually gzipped) map file

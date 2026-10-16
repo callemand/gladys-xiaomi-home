@@ -101,6 +101,8 @@ export function snapshotFromStatus(status = {}, percents = {}) {
       gladysState === VACUUM_CLEANER_STATE.CHARGING || gladysState === VACUUM_CLEANER_STATE.DOCKED,
     error: gladysState === VACUUM_CLEANER_STATE.ERROR,
     errorCode: numberOrNull(status.error_code) ?? 0,
+    // A MIoT robot labels its own fault codes (see src/xiaomi/miot.js).
+    errorLabel: typeof status.error_label === 'string' ? status.error_label : null,
     cleanTimeSec: Number(status.clean_time) || 0,
     cleanAreaMm2: Number(status.clean_area) || 0,
     percents: {
@@ -192,7 +194,11 @@ export function computeSceneEvents(previous, current, { vacuum, deviceName }) {
   if (current.error && !previous.error) {
     events.push({
       key: SCENE_TRIGGERS.ROBOT_ERROR,
-      data: { ...base, error_code: current.errorCode, error_label: errorLabel(current.errorCode) },
+      data: {
+        ...base,
+        error_code: current.errorCode,
+        error_label: current.errorLabel ?? errorLabel(current.errorCode),
+      },
     });
   }
 

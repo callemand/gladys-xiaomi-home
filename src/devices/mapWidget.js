@@ -168,6 +168,9 @@ export function formatCleanTimestamp(tsSeconds, now = Date.now()) {
  * @returns {number} the area in m², rounded
  */
 export function homeAreaM2(map) {
+  if (!map) {
+    return 0;
+  }
   const cellM2 = (map.pixelSizeMm / 1000) ** 2;
   const px = map.segments.filter((s) => s.named).reduce((sum, s) => sum + (s.pixelCount || 0), 0);
   return Math.round(px * cellM2);
@@ -204,9 +207,11 @@ function actionButton(key, vacuumExternalId, style) {
 
 /**
  * Build the full vacuum widget content (tiles + map + status + buttons).
- * @param {object} map a parsed map (from client.getMap, room names attached)
+ * @param {object|null} map a parsed map (from client.getMap, room names
+ *   attached), or null for a robot that has none: the card is then built
+ *   without the map image
  * @param {object} params parameters
- * @param {string} params.imageKey the image key declared in the content
+ * @param {string|null} params.imageKey the image key declared in the content
  * @param {string} params.vacuumExternalId the vacuum device external_id
  * @param {object} [params.status] the get_status result
  * @param {object} [params.consumables] remaining life % { mainBrush, sideBrush, filter, sensor }
@@ -249,12 +254,14 @@ export function buildMapWidgetContent(
       unit: 'm²',
       color: WIDGET_COLORS.PRIMARY,
     },
-    {
-      type: 'image',
-      key: imageKey,
-      alt: { en: 'Robot cleaning map', fr: 'Carte de nettoyage du robot' },
-      fit: 'contain',
-    },
+    map && imageKey
+      ? {
+          type: 'image',
+          key: imageKey,
+          alt: { en: 'Robot cleaning map', fr: 'Carte de nettoyage du robot' },
+          fit: 'contain',
+        }
+      : null,
     {
       type: 'status',
       items: [
@@ -283,7 +290,7 @@ export function buildMapWidgetContent(
       ],
     },
     ...buttons.filter(Boolean),
-  ];
+  ].filter(Boolean);
 
   return { ttl_seconds: 120, components };
 }

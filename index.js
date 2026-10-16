@@ -614,8 +614,14 @@ gladys.onWidgetGet(MAP_WIDGET_KEY, async ({ settings }) => {
   }
   const { duid } = parseExternalId(vacuumExternalId);
   logger.info(`onWidgetGet(map) <- ${duid}`);
-  const { map, base64, imageKey } = await renderMapForDuid(duid);
-  cacheMapImage(imageKey, base64);
+  // A robot without a map (MIoT) still gets the card: tiles, status, buttons.
+  let map = null;
+  let imageKey = null;
+  if (xiaomi.supportsMap(duid)) {
+    const rendered = await renderMapForDuid(duid);
+    ({ map, imageKey } = rendered);
+    cacheMapImage(imageKey, rendered.base64);
+  }
   // The map image is ready; gather the live numbers for the tiles / status block.
   const [status, consumables] = await Promise.all([
     xiaomi.getStatus(duid).catch((err) => {

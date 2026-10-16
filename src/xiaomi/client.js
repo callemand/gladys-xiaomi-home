@@ -9,6 +9,10 @@
 // off "Prefer the local connection" in Gladys, the order is reversed. The map is
 // the exception: the robot uploads it to the Xiaomi cloud, so it always needs
 // the cloud connection.
+//
+// The robots Xiaomi builds itself speak MIoT rather than the Roborock RPCs:
+// their requests go through the adapter of miot.js, so the callers never see
+// the difference (see that file).
 // -----------------------------------------------------------------------------
 
 import { gunzipSync } from 'node:zlib';
@@ -17,8 +21,17 @@ import { createLogger } from '@gladysassistant/integration-sdk';
 
 import { ROBOROCK_METHOD, XIAOMI_REGIONS } from '../constants.js';
 import { parseRRMap } from '../map/mapParser.js';
+import { decryptJsonMap, mapObjectName, parseJsonMap } from '../map/xiaomiJsonMap.js';
 import { MiCloudClient } from './miCloud.js';
 import { MiioLocalTransport } from './miioLocalTransport.js';
+import {
+  assertMiotSuccess,
+  commandToMiot,
+  consumableFromProperties,
+  miotProfile,
+  propertiesRequest,
+  statusFromProperties,
+} from './miot.js';
 import { attachRoomNames, normalizeRoomMappings } from './rooms.js';
 
 const logger = createLogger({ name: 'xiaomi:client' });
@@ -221,6 +234,24 @@ export class XiaomiClient {
 
     await Promise.all(
       this.devices.map(async (device) => {
+        const profile = miotProfile(device.model);
+        if (profile) {
+          // A MIoT robot names its rooms in its map, along with the ids it cleans.
+          if (profile.roomClean && profile.map) {
+            try {
+              const map = await this.#getJsonMap(device.duid, profile, { includePixels: false });
+              device.rooms = map.segments
+                .filter((segment) => segment.named)
+                .map((segment) => ({
+                  id: segment.roomId,
+                  name: segment.roomName || `Room ${segment.roomId}`,
+                }));
+            } catch (e) {
+              logger.warn(`Could not load the rooms of ${device.duid}: ${e.message}`);
+            }
+          }
+          return;
+        }
         try {
           const mapping = await this.#execute(device.duid, ROBOROCK_METHOD.GET_ROOM_MAPPING, []);
           device.rooms = normalizeRoomMappings(mapping, cloudRooms);
@@ -247,6 +278,15 @@ export class XiaomiClient {
    * @returns {Promise<object>} the get_status result
    */
   async getStatus(duid) {
+    const profile = this.#miotProfileOf(duid);
+    if (profile) {
+      const results = await this.#execute(
+        duid,
+        'get_properties',
+        propertiesRequest(duid, profile.status),
+      );
+      return statusFromProperties(profile, results);
+    }
     const result = await this.#execute(duid, 'get_status', []);
     return Array.isArray(result) ? result[0] : result;
   }
@@ -257,6 +297,15 @@ export class XiaomiClient {
    * @returns {Promise<object>} the get_consumable result
    */
   async getConsumable(duid) {
+    const profile = this.#miotProfileOf(duid);
+    if (profile) {
+      const results = await this.#execute(
+        duid,
+        'get_properties',
+        propertiesRequest(duid, profile.consumables),
+      );
+      return consumableFromProperties(profile, results);
+    }
     const result = await this.#execute(duid, ROBOROCK_METHOD.GET_CONSUMABLE, []);
     return Array.isArray(result) ? result[0] : result;
   }
@@ -265,9 +314,13 @@ export class XiaomiClient {
    * Fetch the cleaning history summary of one robot. The answer is returned as
    * is: its shape depends on the firmware (see devices/lastClean.js).
    * @param {string} duid the device id
-   * @returns {Promise<object|Array>} the get_clean_summary result
+   * @returns {Promise<object|Array|null>} the get_clean_summary result, or null
+   *   for a MIoT robot, which keeps no such history
    */
   async getCleanSummary(duid) {
+    if (this.#miotProfileOf(duid)) {
+      return null;
+    }
     return this.#execute(duid, ROBOROCK_METHOD.GET_CLEAN_SUMMARY, []);
   }
 
@@ -283,6 +336,13 @@ export class XiaomiClient {
    *   segment with its room name when the account knows it
    */
   async getMap(duid, { includePixels = false } = {}) {
+    if (!this.supportsMap(duid)) {
+      throw new Error(`The map of robot ${duid} is not supported (no map in its MIoT profile)`);
+    }
+    const profile = this.#miotProfileOf(duid);
+    if (profile) {
+      return this.#getJsonMap(duid, profile, { includePixels });
+    }
     if (!this.cloud) {
       throw new Error('The map is stored in the Xiaomi cloud, which is not connected');
     }
@@ -295,6 +355,42 @@ export class XiaomiClient {
     const robot = this.devices.find((device) => device.duid === duid);
     map.segments = attachRoomNames(map.segments, robot ? robot.rooms : []);
     map.namedSegmentCount = map.segments.filter((segment) => segment.named).length;
+    return map;
+  }
+
+  /**
+   * Whether a robot uploads a map: the Roborock-built ones, and the MIoT ones
+   * whose profile has a `map`.
+   * @param {string} duid the device id
+   * @returns {boolean} false for a MIoT robot whose profile has no `map`
+   */
+  supportsMap(duid) {
+    const profile = this.#miotProfileOf(duid);
+    return !profile || Boolean(profile.map);
+  }
+
+  /**
+   * Fetch, decrypt and parse the map of a MIoT robot that uploads it as a JSON
+   * map (see map/xiaomiJsonMap.js): its `map-obj-name` property names the file.
+   * @param {string} duid the device id
+   * @param {object} profile the MIoT profile
+   * @param {object} options options
+   * @param {boolean} options.includePixels keep the pixel grid, for rendering
+   * @returns {Promise<object>} the parsed map
+   */
+  async #getJsonMap(duid, profile, { includePixels }) {
+    const robot = this.devices.find((device) => device.duid === duid);
+    const { siid, piid } = profile.map.objectName;
+    const results = await this.#execute(duid, 'get_properties', [{ did: duid, siid, piid }]);
+    const answer = Array.isArray(results) ? results[0] : null;
+    const objectName = mapObjectName(answer && answer.value);
+    if (!objectName) {
+      throw new Error(`Robot ${duid} names no map file (property ${siid}.${piid})`);
+    }
+    const url = await this.cloud.getInterimFileUrl(objectName);
+    const file = await this.cloud.downloadMapFile(url);
+    const map = parseJsonMap(decryptJsonMap(file, robot.model, duid), { includePixels });
+    map.namedSegmentCount = map.segments.filter((segment) => segment.roomName).length;
     return map;
   }
 
@@ -322,7 +418,27 @@ export class XiaomiClient {
    * @returns {Promise<*>} the RPC result
    */
   async sendCommand(duid, method, params = []) {
+    const profile = this.#miotProfileOf(duid);
+    if (profile) {
+      const command = commandToMiot(profile, duid, method, params);
+      if (!command) {
+        throw new Error(`Command ${method} is not supported by robot ${duid} (MIoT robot)`);
+      }
+      const result = await this.#execute(duid, command.method, command.params);
+      assertMiotSuccess(result, command.method);
+      return result;
+    }
     return this.#execute(duid, method, params);
+  }
+
+  /**
+   * The MIoT profile of a robot, if it speaks MIoT (see miot.js).
+   * @param {string} duid the device id
+   * @returns {object|null} the profile, or null for a Roborock-speaking robot
+   */
+  #miotProfileOf(duid) {
+    const device = this.devices.find((candidate) => candidate.duid === duid);
+    return miotProfile(device ? device.model : null);
   }
 
   /**

@@ -108,8 +108,12 @@ a short-lived download URL, and the file is a gzipped **RRMap**, the format the
 Roborock app gets too. It is parsed and rendered to a PNG in-process (no native
 dependency), cached 60 s, 8 s while a cleaning is running, and open widgets are
 asked to refresh every 15 s during a cleaning. Only robots **built by Roborock**
-(S5, S6, S7…) upload this format: on other Mi Home vacuums the widget reports an
-error, and every other feature keeps working.
+(S5, S6, S7…) upload this format. The MIoT robots Xiaomi builds itself upload a
+JSON map instead (`src/map/xiaomiJsonMap.js`): the file their `map-obj-name`
+property names, a `{"version":2,"data":…}` envelope (AES-128-CBC, key derived
+from the model and the device id) around a zlib-compressed JSON grid. It is
+turned into the same structure, so the renderer draws it unchanged. A robot
+without a map still gets the widget, without the map image.
 
 The widget needs Gladys **5.1.0** or later.
 
@@ -174,7 +178,14 @@ exercises the silent `passToken` login, discovery, polling and commands.
 
 - **Robot vacuums only.** The name matches the app, but a Xiaomi Home account
   carries many other device types and none of them is handled here.
-- Only the miIO protocol family is implemented.
+- Only the miIO protocol family is implemented. The robots Xiaomi builds
+  itself speak MIoT instead (properties and actions) and only answer when their
+  model has a profile in `src/xiaomi/miot.js`: today the **Xiaomi Robot Vacuum
+  S20+** (`xiaomi.vacuum.b108gl`). They report state, battery, suction, brushes
+  and filter, upload a JSON map (see above), and take start / pause / stop /
+  dock / suction / room cleaning commands (their rooms and room ids come from
+  that map); the cleaning history is Roborock-only. Another model
+  needs its own profile, read from its spec on https://home.miot-spec.com.
 - **No routines.** The sibling Roborock integration exposes the account routines
   as buttons, but those are Roborock cloud scenes; a Mi Home scene is a different
   API entirely and is not implemented here. Everything else the robot itself
