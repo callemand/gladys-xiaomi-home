@@ -77,6 +77,7 @@ jobs:
           mv "$tmp" gladys-assistant-integration.json
           # jq puts each array item on its own line, and Prettier rejects that.
           # Format the file here, or format:check fails on the next PR.
+          npm ci --ignore-scripts
           npx prettier --write gladys-assistant-integration.json
 
           echo "version=${new_version}" >> "$GITHUB_OUTPUT"
